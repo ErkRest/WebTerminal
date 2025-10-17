@@ -3,6 +3,8 @@ const serve = require('koa-static');
 const WebSocket = require('ws');
 const { spawn, exec } = require('child_process');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const iconv = require('iconv-lite');
 
 const app = new Koa();
@@ -13,12 +15,23 @@ const wss = new WebSocket.Server({ server });
 app.use(serve(path.join(__dirname, 'dist')));
 
 // WebSocket 連接管理
-const clients = new Set();
+const clients = new Map(); // 改為 Map 來存儲客戶端狀態
 const processes = new Map(); // 存儲活躍的進程
+const pausedProcesses = new Map(); // 存儲暫停中的進程
 
 wss.on('connection', (ws) => {
   console.log('新的 WebSocket 連接已建立');
-  clients.add(ws);
+  
+  // 為每個 WebSocket 連接分配唯一 ID 和初始狀態
+  ws.id = Math.random().toString(36).substr(2, 9);
+  
+  // 初始化客戶端狀態
+  const defaultWorkingDir = process.platform === 'win32' ? 'C:\\' : os.homedir();
+  clients.set(ws.id, {
+    ws: ws,
+    workingDirectory: defaultWorkingDir, // 使用安全的默認工作目錄
+    terminals: new Map() // 支援多終端，每個終端有自己的工作目錄
+  });
   
   // 發送歡迎消息
   ws.send(JSON.stringify({
@@ -42,27 +55,30 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log('WebSocket 連接已關閉');
-    clients.delete(ws);
     
     // 清理該客戶端的進程
     for (const [processId, process] of processes) {
       if (process.clientId === ws.id) {
-        process.kill();
+        try {
+          process.process.kill();
+        } catch (error) {
+          console.error(`終止進程 ${processId} 失敗:`, error);
+        }
         processes.delete(processId);
       }
     }
+    
+    // 從客戶端列表中移除
+    clients.delete(ws.id);
   });
-
-  // 為每個 WebSocket 連接分配唯一 ID
-  ws.id = Math.random().toString(36).substr(2, 9);
 });
 
 function handleCommand(ws, message) {
-  const { type, command, processId } = message;
+  const { type, command, processId, terminalId, response } = message;
   
   switch (type) {
     case 'execute':
-      executeCommand(ws, command);
+      executeCommand(ws, message);
       break;
       
     case 'kill':
@@ -71,6 +87,14 @@ function handleCommand(ws, message) {
       
     case 'list':
       listProcesses(ws);
+      break;
+      
+    case 'pause_response':
+      handlePauseResponse(ws, message);
+      break;
+      
+    case 'get_system_info':
+      getSystemInfo(ws);
       break;
       
     default:
@@ -82,7 +106,9 @@ function handleCommand(ws, message) {
   }
 }
 
-function executeCommand(ws, command) {
+function executeCommand(ws, message) {
+  const { command, terminalId } = message;
+  
   if (!command || command.trim() === '') {
     ws.send(JSON.stringify({
       type: 'error',
@@ -93,18 +119,30 @@ function executeCommand(ws, command) {
   }
 
   const processId = Math.random().toString(36).substr(2, 9);
+  const clientState = clients.get(ws.id);
+  
+  if (!clientState) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: '客戶端狀態不存在',
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+
+  // 獲取或初始化終端的工作目錄
+  const currentTerminalId = terminalId || 'default';
+  if (!clientState.terminals.has(currentTerminalId)) {
+    clientState.terminals.set(currentTerminalId, {
+      workingDirectory: clientState.workingDirectory
+    });
+  }
+  
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  const currentWorkingDir = terminalState.workingDirectory;
   
   // 判斷操作系統並使用相應的 shell
   const isWindows = process.platform === 'win32';
-  const shell = isWindows ? 'cmd' : 'bash';
-  
-  // 在 Windows 上，先設置 UTF-8 編碼，然後執行用戶命令
-  let shellArgs;
-  if (isWindows) {
-    shellArgs = ['/c', `chcp 65001 >nul 2>&1 && ${command}`];
-  } else {
-    shellArgs = ['-c', command];
-  }
   
   ws.send(JSON.stringify({
     type: 'info',
@@ -112,12 +150,44 @@ function executeCommand(ws, command) {
     processId: processId,
     timestamp: new Date().toISOString()
   }));
+  
+  // 調試信息
+  console.log(`執行命令: ${command}, 工作目錄: ${currentWorkingDir}`);
+
+  // 特殊處理 cd 命令
+  if (command.trim().startsWith('cd ')) {
+    handleCdCommand(ws, command.trim(), currentTerminalId, processId);
+    return;
+  }
 
   try {
-    // Windows 系統需要設置正確的編碼
+    const shell = isWindows ? 'cmd' : 'bash';
+    let shellArgs;
+    
+    // 驗證工作目錄是否存在
+    if (!fs.existsSync(currentWorkingDir)) {
+      ws.send(JSON.stringify({
+        type: 'error',
+        message: `工作目錄不存在: ${currentWorkingDir}`,
+        processId: processId,
+        timestamp: new Date().toISOString()
+      }));
+      return;
+    }
+    
+    // 構建命令
+    if (isWindows) {
+      // Windows: 簡化命令構造，直接執行
+      shellArgs = ['/c', `chcp 65001 >nul 2>&1 && ${command}`];
+    } else {
+      // Linux/Mac: 直接執行命令
+      shellArgs = ['-c', command];
+    }
+    
     const spawnOptions = {
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: false
+      shell: false,
+      cwd: currentWorkingDir // 設置子進程的工作目錄
     };
     
     // Windows 系統設置編碼為 UTF-8
@@ -131,27 +201,19 @@ function executeCommand(ws, command) {
     processes.set(processId, {
       process: childProcess,
       clientId: ws.id,
+      terminalId: currentTerminalId,
       command: command,
       startTime: new Date()
     });
 
     // 處理標準輸出
     childProcess.stdout.on('data', (data) => {
-      // Windows 系統需要處理編碼轉換
-      let output;
-      if (isWindows) {
-        // 嘗試從 Big5/GBK 轉換為 UTF-8
-        try {
-          output = iconv.decode(data, 'cp950'); // cp950 是 Big5 的代碼頁
-        } catch (error) {
-          try {
-            output = iconv.decode(data, 'gbk');
-          } catch (error2) {
-            output = data.toString('utf8');
-          }
-        }
-      } else {
-        output = data.toString('utf8');
+      const output = decodeOutput(data, isWindows);
+      
+      // 檢測是否包含暫停提示
+      if (detectPausePrompt(output)) {
+        handlePauseDetected(ws, processId, output);
+        return;
       }
       
       ws.send(JSON.stringify({
@@ -164,22 +226,7 @@ function executeCommand(ws, command) {
 
     // 處理標準錯誤
     childProcess.stderr.on('data', (data) => {
-      // Windows 系統需要處理編碼轉換
-      let output;
-      if (isWindows) {
-        try {
-          output = iconv.decode(data, 'cp950'); // cp950 是 Big5 的代碼頁
-        } catch (error) {
-          try {
-            output = iconv.decode(data, 'gbk');
-          } catch (error2) {
-            output = data.toString('utf8');
-          }
-        }
-      } else {
-        output = data.toString('utf8');
-      }
-      
+      const output = decodeOutput(data, isWindows);
       ws.send(JSON.stringify({
         type: 'stderr',
         data: output,
@@ -217,6 +264,112 @@ function executeCommand(ws, command) {
       message: `執行命令失敗: ${error.message}`,
       timestamp: new Date().toISOString()
     }));
+  }
+}
+
+// 處理 cd 命令
+function handleCdCommand(ws, command, terminalId, processId) {
+  const clientState = clients.get(ws.id);
+  if (!clientState) return;
+  
+  const terminalState = clientState.terminals.get(terminalId);
+  if (!terminalState) return;
+  
+  // 解析目標目錄
+  let targetDir = command.substring(3).trim(); // 移除 'cd '
+  
+  if (targetDir === '') {
+    // cd 沒有參數，回到用戶主目錄
+    targetDir = os.homedir();
+  } else if (targetDir === '..') {
+    // cd .. 回到上級目錄
+    targetDir = path.dirname(terminalState.workingDirectory);
+  } else if (targetDir === '.') {
+    // cd . 保持當前目錄
+    targetDir = terminalState.workingDirectory;
+  } else if (!path.isAbsolute(targetDir)) {
+    // 相對路徑，基於當前工作目錄
+    targetDir = path.resolve(terminalState.workingDirectory, targetDir);
+  }
+  
+  // 檢查目標目錄是否存在
+  try {
+    const stats = fs.statSync(targetDir);
+    if (stats.isDirectory()) {
+      // 更新終端的工作目錄
+      terminalState.workingDirectory = targetDir;
+      
+      ws.send(JSON.stringify({
+        type: 'info',
+        message: `目錄已切換到: ${targetDir}`,
+        processId: processId,
+        timestamp: new Date().toISOString()
+      }));
+      
+      // 發送工作目錄更新通知
+      ws.send(JSON.stringify({
+        type: 'working_directory_updated',
+        terminalId: terminalId,
+        workingDirectory: targetDir,
+        timestamp: new Date().toISOString()
+      }));
+      
+      ws.send(JSON.stringify({
+        type: 'close',
+        message: `進程結束，退出碼: 0`,
+        processId: processId,
+        exitCode: 0,
+        timestamp: new Date().toISOString()
+      }));
+    } else {
+      ws.send(JSON.stringify({
+        type: 'stderr',
+        data: `'${targetDir}' 不是一個目錄`,
+        processId: processId,
+        timestamp: new Date().toISOString()
+      }));
+      
+      ws.send(JSON.stringify({
+        type: 'close',
+        message: `進程結束，退出碼: 1`,
+        processId: processId,
+        exitCode: 1,
+        timestamp: new Date().toISOString()
+      }));
+    }
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'stderr',
+      data: `系統找不到指定的路徑。`,
+      processId: processId,
+      timestamp: new Date().toISOString()
+    }));
+    
+    ws.send(JSON.stringify({
+      type: 'close',
+      message: `進程結束，退出碼: 1`,
+      processId: processId,
+      exitCode: 1,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
+// 解碼輸出內容
+function decodeOutput(data, isWindows) {
+  if (isWindows) {
+    // 嘗試從 Big5/GBK 轉換為 UTF-8
+    try {
+      return iconv.decode(data, 'cp950'); // cp950 是 Big5 的代碼頁
+    } catch (error) {
+      try {
+        return iconv.decode(data, 'gbk');
+      } catch (error2) {
+        return data.toString('utf8');
+      }
+    }
+  } else {
+    return data.toString('utf8');
   }
 }
 
@@ -272,6 +425,130 @@ function listProcesses(ws) {
   ws.send(JSON.stringify({
     type: 'process_list',
     processes: userProcesses,
+    timestamp: new Date().toISOString()
+  }));
+}
+
+// 暫停相關函數
+function detectPausePrompt(output) {
+  // 檢測各種暫停提示語句
+  const pausePatterns = [
+    /要繼續迭次嗎[？?]/i,
+    /continue\s*\?/i,
+    /按任意鍵繼續/i,
+    /press\s+any\s+key/i,
+    /continue\s*\([yn]\)/i,
+    /繼續\s*\([yn]\)/i,
+    /more\s*--/i,
+    /--More--/i
+  ];
+  
+  return pausePatterns.some(pattern => pattern.test(output));
+}
+
+function handlePauseDetected(ws, processId, output) {
+  console.log(`檢測到暫停提示: ${processId}`);
+  
+  const processInfo = processes.get(processId);
+  if (!processInfo) return;
+  
+  // 將進程標記為暫停狀態
+  pausedProcesses.set(processId, {
+    ...processInfo,
+    pauseTime: new Date()
+  });
+  
+  // 發送暫停通知給前端
+  ws.send(JSON.stringify({
+    type: 'pause_detected',
+    message: '程序已暫停，等待用戶確認',
+    processId: processId,
+    promptText: output.trim(),
+    timestamp: new Date().toISOString()
+  }));
+}
+
+function handlePauseResponse(ws, message) {
+  const { processId, response } = message;
+  
+  console.log(`收到暫停回應: ${processId}, 回應: ${response}`);
+  
+  const processInfo = pausedProcesses.get(processId);
+  if (!processInfo) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: '找不到暫停中的進程',
+      processId: processId,
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+  
+  try {
+    // 根據回應向進程發送相應的輸入
+    let input = '';
+    switch (response.toLowerCase()) {
+      case 'yes':
+      case 'y':
+      case '是':
+      case '繼續':
+        input = 'y\n';
+        break;
+      case 'no':
+      case 'n':
+      case '否':
+      case '停止':
+        input = 'n\n';
+        break;
+      case 'space':
+      case ' ':
+        input = ' ';
+        break;
+      case 'enter':
+        input = '\n';
+        break;
+      default:
+        input = response + '\n';
+    }
+    
+    // 向進程發送輸入
+    processInfo.process.stdin.write(input);
+    
+    // 從暫停列表中移除
+    pausedProcesses.delete(processId);
+    
+    ws.send(JSON.stringify({
+      type: 'pause_resumed',
+      message: `已回應：${response}，程序繼續執行`,
+      processId: processId,
+      timestamp: new Date().toISOString()
+    }));
+    
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: `發送回應失敗: ${error.message}`,
+      processId: processId,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
+// 獲取系統信息
+function getSystemInfo(ws) {
+  const os = require('os');
+  
+  const systemInfo = {
+    username: os.userInfo().username,
+    hostname: os.hostname(),
+    platform: os.platform(),
+    homedir: os.homedir(),
+    tmpdir: os.tmpdir()
+  };
+  
+  ws.send(JSON.stringify({
+    type: 'system_info',
+    data: systemInfo,
     timestamp: new Date().toISOString()
   }));
 }
