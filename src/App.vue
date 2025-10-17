@@ -48,7 +48,7 @@
             :key="index"
             :class="['output-line', line.type]"
           >
-            <span v-if="settings.showTimestamp" class="timestamp">{{ formatTime(line.timestamp) }}</span>
+            <span v-if="settings.showTimestamp" class="timestamp">{{ getTimestampDisplay(line, index) }}</span>
             <span v-html="formatOutput(line.message)"></span>
           </div>
         </div>
@@ -56,7 +56,7 @@
         <!-- 命令輸入區 -->
         <div class="command-input-area">
           <div class="input-group">
-            <span class="command-prompt">{{ getPromptText() }}</span>
+            <!-- <span class="command-prompt">{{ getPromptText() }}</span> -->
             <input
               v-model="currentTerminal.commandInput"
               @keyup.enter="executeCommand"
@@ -302,6 +302,18 @@
                 <span class="setting-description">每個終端保存的命令歷史數量</span>
               </label>
             </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input 
+                  type="checkbox" 
+                  v-model="settings.optimizeInteractiveCommands"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">優化交互式命令</span>
+                <span class="setting-description">自動將 top, htop 等命令轉換為批次模式，避免 ANSI 轉義序列問題</span>
+              </label>
+            </div>
           </div>
           
           <!-- 快捷鍵設定 -->
@@ -364,7 +376,8 @@ export default {
       autoScroll: true,            // 自動滾動
       fontSize: 14,                // 字體大小
       maxOutputLines: 1000,        // 最大輸出行數
-      maxHistorySize: 50           // 命令歷史記錄數量
+      maxHistorySize: 50,          // 命令歷史記錄數量
+      optimizeInteractiveCommands: true  // 優化交互式命令（如 top, htop）
     })
     
     // DOM 引用
@@ -604,12 +617,31 @@ export default {
       
       if (!terminal) return
       
-      terminal.outputLines.push({
-        type,
-        message,
-        processId,
-        timestamp: new Date()
-      })
+      // 處理多行輸出：如果是 stdout 或 stderr，並且包含換行符，則分別處理每一行
+      if ((type === 'stdout' || type === 'stderr') && typeof message === 'string' && message.includes('\n')) {
+        const lines = message.split('\n')
+        const baseTimestamp = new Date()
+        
+        lines.forEach((line, index) => {
+          // 跳過空行，除非它是唯一的行
+          if (line.trim() === '' && lines.length > 1) return
+          
+          terminal.outputLines.push({
+            type,
+            message: line,
+            processId,
+            timestamp: new Date(baseTimestamp.getTime() + index) // 輕微偏移時間戳以保持順序
+          })
+        })
+      } else {
+        // 單行輸出的正常處理
+        terminal.outputLines.push({
+          type,
+          message,
+          processId,
+          timestamp: new Date()
+        })
+      }
       
       // 如果是當前活躍終端且啟用自動滾動，則滾動到底部
       if (targetTerminalId === activeTerminalId.value && settings.autoScroll) {
@@ -667,7 +699,8 @@ export default {
         autoScroll: true,
         fontSize: 14,
         maxOutputLines: 1000,
-        maxHistorySize: 50
+        maxHistorySize: 50,
+        optimizeInteractiveCommands: true
       })
     }
     
@@ -723,7 +756,10 @@ export default {
       ws.send(JSON.stringify({
         type: 'execute',
         command: command,
-        terminalId: terminal.id
+        terminalId: terminal.id,
+        options: {
+          optimizeInteractiveCommands: settings.optimizeInteractiveCommands
+        }
       }))
       
       // 在輸出中顯示執行的命令
@@ -788,6 +824,7 @@ export default {
     }
     
     // 格式化時間
+    // 格式化時間戳顯示
     const formatTime = (timestamp) => {
       const date = new Date(timestamp)
       return date.toLocaleTimeString('zh-TW', { 
@@ -796,6 +833,32 @@ export default {
         minute: '2-digit',
         second: '2-digit'
       })
+    }
+    
+    // 智慧時間戳顯示：對於連續的同類型消息，只在第一條顯示時間
+    const getTimestampDisplay = (line, index) => {
+      if (!line.timestamp) return ''
+      
+      const lines = filteredOutputLines.value
+      if (index === 0) {
+        return formatTime(line.timestamp)
+      }
+      
+      const prevLine = lines[index - 1]
+      const currentTime = new Date(line.timestamp).getTime()
+      const prevTime = new Date(prevLine.timestamp).getTime()
+      
+      // 如果與前一行的時間差小於 1 秒，且是同類型的輸出，則不顯示時間戳
+      if (
+        Math.abs(currentTime - prevTime) < 1000 && 
+        line.type === prevLine.type &&
+        (line.type === 'stdout' || line.type === 'stderr') &&
+        line.processId === prevLine.processId
+      ) {
+        return '' // 返回空字符串，但 CSS 會保持空間對齊
+      }
+      
+      return formatTime(line.timestamp)
     }
     
     // 格式化輸出內容
@@ -919,6 +982,7 @@ export default {
       previousCommand,
       nextCommand,
       formatTime,
+      getTimestampDisplay,
       formatOutput,
       getPromptText,
       updateWorkingDirectory,
@@ -935,3 +999,25 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+.timestamp {
+  display: inline-block;
+  width: 70px; /* 固定寬度確保對齊 */
+  color: #888;
+  font-size: 0.9em;
+  margin-right: 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.output-line {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 2px;
+}
+
+.output-line .timestamp {
+  flex-shrink: 0; /* 防止時間戳被壓縮 */
+}
+</style>

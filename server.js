@@ -2,6 +2,9 @@ const Koa = require('koa');
 const serve = require('koa-static');
 const WebSocket = require('ws');
 const { spawn, exec } = require('child_process');
+const pty = require('node-pty');
+const stripAnsiModule = require('strip-ansi');
+const stripAnsi = stripAnsiModule.default || stripAnsiModule;
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -60,7 +63,13 @@ wss.on('connection', (ws) => {
     for (const [processId, process] of processes) {
       if (process.clientId === ws.id) {
         try {
-          process.process.kill();
+          if (process.isPTY) {
+            // PTY 進程
+            process.process.kill();
+          } else {
+            // 普通進程
+            process.process.kill('SIGTERM');
+          }
         } catch (error) {
           console.error(`終止進程 ${processId} 失敗:`, error);
         }
@@ -106,6 +115,166 @@ function handleCommand(ws, message) {
   }
 }
 
+// 檢測是否需要 TTY 的命令
+function needsTTY(command) {
+  const parts = command.trim().split(' ');
+  const cmd = parts[0];
+  const args = parts.slice(1);
+  
+  // 特殊情況：批次模式的命令通常不需要 TTY
+  if (cmd === 'top' && args.includes('-b')) {
+    return false;
+  }
+  
+  if (cmd === 'less' || cmd === 'more') {
+    // 如果有文件參數，可以用 cat 替代
+    return args.length === 0;
+  }
+  
+  const ttyCommands = [
+    'top', 'htop', 'vi', 'vim', 'nano', 'emacs', 
+    'man', 'git log', 'git diff', 'ssh', 'mysql', 'psql', 'mongo',
+    'python', 'python3', 'node', 'irb', 'ruby', 'scala', 'sbt'
+  ];
+  
+  return ttyCommands.includes(cmd) || 
+         command.includes('--interactive') || 
+         command.includes('-i');
+}
+
+// 優化特定命令以便在網頁環境中更好地顯示
+function optimizeCommandForWeb(command) {
+  const cmd = command.trim().split(' ')[0];
+  const args = command.trim().split(' ').slice(1);
+  
+  switch (cmd) {
+    case 'top':
+      // 將 top 轉換為批次模式，只顯示一次
+      if (!args.includes('-b')) {
+        return `${cmd} -b -n1 ${args.join(' ')}`.trim();
+      }
+      break;
+    case 'htop':
+      // htop 沒有批次模式，改用 top
+      return `top -b -n1 ${args.join(' ')}`.trim();
+    case 'less':
+    case 'more':
+      // 改用 cat 來避免分頁
+      if (args.length > 0) {
+        return `cat ${args.join(' ')}`;
+      }
+      break;
+  }
+  
+  return command;
+}
+
+// 使用 PTY 執行需要 TTY 的命令
+function executeCommandWithPTY(ws, message) {
+  const { command, terminalId, options = {} } = message;
+  const processId = Math.random().toString(36).substr(2, 9);
+  const clientState = clients.get(ws.id);
+  const currentTerminalId = terminalId || 'default';
+  
+  if (!clientState.terminals.has(currentTerminalId)) {
+    clientState.terminals.set(currentTerminalId, {
+      workingDirectory: clientState.workingDirectory
+    });
+  }
+  
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  const currentWorkingDir = terminalState.workingDirectory;
+  const isWindows = process.platform === 'win32';
+  
+  // 檢查是否需要清理 ANSI 序列（根據前端設定決定）
+  const shouldStripAnsi = options.optimizeInteractiveCommands !== false; // 如果優化交互式命令，則清理 ANSI
+  
+  ws.send(JSON.stringify({
+    type: 'info',
+    message: `執行命令 (PTY): ${command}`,
+    processId: processId,
+    timestamp: new Date().toISOString()
+  }));
+  
+  console.log(`使用 PTY 執行命令: ${command}, 工作目錄: ${currentWorkingDir}`);
+  
+  try {
+    // 設置環境變數，特別針對交互式命令
+    const env = { ...process.env };
+    
+    // 針對特定命令優化環境變數
+    const cmdName = command.trim().split(' ')[0];
+    if (cmdName === 'top') {
+      env.TERM = 'dumb'; // 使用簡單終端模式
+      env.COLUMNS = '80';
+      env.LINES = '24';
+    } else if (['less', 'more', 'man'].includes(cmdName)) {
+      env.PAGER = 'cat'; // 禁用分頁
+      env.MANPAGER = 'cat';
+    }
+    
+    // 使用 node-pty 創建偽終端
+    const ptyProcess = pty.spawn(isWindows ? 'cmd.exe' : 'bash', 
+      isWindows ? ['/c', command] : ['-c', command], {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 24,
+      cwd: currentWorkingDir,
+      env: env
+    });
+
+    // 存儲進程信息
+    processes.set(processId, {
+      process: ptyProcess,
+      clientId: ws.id,
+      terminalId: currentTerminalId,
+      command: command,
+      startTime: new Date(),
+      isPTY: true,
+      shouldStripAnsi: shouldStripAnsi
+    });
+
+    // 處理 PTY 輸出
+    ptyProcess.onData((data) => {
+      let processedData = data;
+      
+      // 如果需要，清理 ANSI 轉義序列
+      if (shouldStripAnsi) {
+        processedData = stripAnsi(processedData);
+        // 清理多餘的換行符
+        processedData = processedData.replace(/\n\s*\n/g, '\n');
+      }
+      
+      ws.send(JSON.stringify({
+        type: 'stdout',
+        data: processedData,
+        processId: processId,
+        timestamp: new Date().toISOString()
+      }));
+    });
+
+    // 處理 PTY 結束
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      processes.delete(processId);
+      ws.send(JSON.stringify({
+        type: 'close',
+        message: `PTY 進程結束，退出碼: ${exitCode}${signal ? `, 信號: ${signal}` : ''}`,
+        processId: processId,
+        exitCode: exitCode,
+        timestamp: new Date().toISOString()
+      }));
+    });
+
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: `PTY 執行命令失敗: ${error.message}`,
+      processId: processId,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
 function executeCommand(ws, message) {
   const { command, terminalId } = message;
   
@@ -144,6 +313,42 @@ function executeCommand(ws, message) {
   // 判斷操作系統並使用相應的 shell
   const isWindows = process.platform === 'win32';
   
+  // 特殊處理 cd 命令
+  if (command.trim().startsWith('cd ')) {
+    handleCdCommand(ws, command.trim(), currentTerminalId, processId);
+    return;
+  }
+  
+  // 檢查是否需要 TTY
+  if (needsTTY(command)) {
+    const { options = {} } = message;
+    
+    // 根據前端設定決定是否優化命令
+    if (options.optimizeInteractiveCommands !== false) {
+      // 優化命令以便在網頁環境中更好地顯示
+      const optimizedCommand = optimizeCommandForWeb(command);
+      const optimizedMessage = { ...message, command: optimizedCommand };
+      
+      // 如果命令被優化為不需要 PTY 的版本，使用常規執行
+      if (!needsTTY(optimizedCommand)) {
+        executeRegularCommand(ws, optimizedMessage, processId, currentWorkingDir);
+        return;
+      }
+    }
+    
+    executeCommandWithPTY(ws, message);
+    return;
+  }
+  
+  executeRegularCommand(ws, message, processId, currentWorkingDir);
+}
+
+// 執行常規命令（不需要 PTY）
+function executeRegularCommand(ws, message, processId, currentWorkingDir) {
+  const { command, terminalId } = message;
+  const currentTerminalId = terminalId || 'default';
+  const isWindows = process.platform === 'win32';
+  
   ws.send(JSON.stringify({
     type: 'info',
     message: `執行命令: ${command}`,
@@ -153,12 +358,6 @@ function executeCommand(ws, message) {
   
   // 調試信息
   console.log(`執行命令: ${command}, 工作目錄: ${currentWorkingDir}`);
-
-  // 特殊處理 cd 命令
-  if (command.trim().startsWith('cd ')) {
-    handleCdCommand(ws, command.trim(), currentTerminalId, processId);
-    return;
-  }
 
   try {
     const shell = isWindows ? 'cmd' : 'bash';
@@ -395,7 +594,13 @@ function killProcess(ws, processId) {
   }
 
   try {
-    processInfo.process.kill('SIGTERM');
+    if (processInfo.isPTY) {
+      // PTY 進程使用 kill 方法
+      processInfo.process.kill();
+    } else {
+      // 普通進程使用 SIGTERM 信號
+      processInfo.process.kill('SIGTERM');
+    }
     processes.delete(processId);
     
     ws.send(JSON.stringify({
@@ -567,7 +772,13 @@ process.on('SIGTERM', () => {
   // 終止所有子進程
   for (const [processId, processInfo] of processes) {
     try {
-      processInfo.process.kill();
+      if (processInfo.isPTY) {
+        // PTY 進程
+        processInfo.process.kill();
+      } else {
+        // 普通進程
+        processInfo.process.kill('SIGTERM');
+      }
     } catch (error) {
       console.error(`終止進程 ${processId} 失敗:`, error);
     }
