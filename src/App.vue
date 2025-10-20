@@ -3,9 +3,27 @@
     <!-- 頂部狀態欄 -->
     <div class="header">
       <h1>WebSocket Terminal Controller</h1>
-      <div class="connection-status">
-        <div :class="['status-dot', { connected: isConnected }]"></div>
-        <span>{{ connectionStatus }}</span>
+      <div class="header-controls">
+        <div class="connection-status">
+          <div :class="['status-dot', { connected: isConnected }]"></div>
+          <span>{{ connectionStatus }}</span>
+        </div>
+        <div class="header-buttons">
+          <button 
+            @click="clearOutput" 
+            class="header-btn"
+            title="清除終端 (Ctrl+L)"
+          >
+            🗑️
+          </button>
+          <button 
+            @click="toggleSettings" 
+            class="header-btn"
+            title="設定"
+          >
+            ⚙️
+          </button>
+        </div>
       </div>
     </div>
 
@@ -41,129 +59,24 @@
           </div>
         </div>
 
-        <!-- 輸出區域 -->
-        <div class="output-area" ref="outputArea" :style="{ fontSize: settings.fontSize + 'px' }">
-          <div 
-            v-for="(line, index) in filteredOutputLines" 
-            :key="index"
-            :class="['output-line', line.type]"
-          >
-            <span v-if="settings.showTimestamp" class="timestamp">{{ getTimestampDisplay(line, index) }}</span>
-            <span v-html="formatOutput(line.message)"></span>
-          </div>
-        </div>
-
-        <!-- 命令輸入區 -->
-        <div class="command-input-area">
-          <div class="input-group">
-            <!-- <span class="command-prompt">{{ getPromptText() }}</span> -->
-            <input
-              v-model="currentTerminal.commandInput"
-              @keyup.enter="executeCommand"
-              @keyup.up="previousCommand"
-              @keyup.down="nextCommand"
-              :disabled="!isConnected"
-              class="command-input"
-              placeholder="輸入命令並按 Enter 執行，↑↓ 瀏覽歷史"
-              ref="commandInputRef"
-            />
-            <button 
-              @click="executeCommand" 
-              :disabled="!isConnected || !currentTerminal.commandInput.trim()"
-              class="btn"
-              style="margin-left: 10px;"
-            >
-              執行
-            </button>
-            <button 
-              @click="clearOutput" 
-              class="btn clear-btn"
-            >
-              清除
-            </button>
-            <button 
-              @click="toggleSettings" 
-              class="btn settings-btn"
-              title="設定"
-            >
-              ⚙️
-            </button>
-          </div>
+        <!-- 整合終端顯示區域 -->
+        <div class="integrated-terminal" ref="terminalContainer" :style="{ fontSize: settings.fontSize + 'px' }">
+          <textarea
+            ref="terminalTextarea"
+            v-model="terminalDisplay"
+            @keydown="handleTerminalKeydown"
+            @click="handleTerminalClick"
+            :disabled="!isConnected"
+            class="terminal-textarea"
+            spellcheck="false"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+          ></textarea>
         </div>
       </div>
 
-      <!-- 側邊欄 - 進程管理 -->
-      <div class="sidebar">
-        <div class="sidebar-header">
-          <span>活躍進程</span>
-          <button @click="refreshProcesses" class="btn sidebar-refresh-btn">
-            刷新
-          </button>
-        </div>
-        
-        <div class="process-list">
-          <div v-if="processes.length === 0" style="color: #888; text-align: center; margin-top: 20px;">
-            沒有活躍的進程
-          </div>
-          
-          <div 
-            v-for="process in processes" 
-            :key="process.id"
-            class="process-item"
-          >
-            <div class="process-id">ID: {{ process.id }}</div>
-            <div class="process-command">{{ process.command }}</div>
-            <div class="process-info">
-              PID: {{ process.pid }}<br>
-              開始時間: {{ formatTime(process.startTime) }}
-            </div>
-            <button 
-              @click="killProcess(process.id)"
-              class="btn btn-danger"
-              style="margin-top: 8px; padding: 4px 8px; font-size: 12px;"
-            >
-              終止
-            </button>
-          </div>
-        </div>
 
-        <!-- 快捷鍵說明 -->
-        <div class="shortcuts">
-          <h4>快捷鍵</h4>
-          <div class="shortcut">
-            <span>執行命令</span>
-            <span class="shortcut-key">Enter</span>
-          </div>
-          <div class="shortcut">
-            <span>上一個命令</span>
-            <span class="shortcut-key">↑</span>
-          </div>
-          <div class="shortcut">
-            <span>下一個命令</span>
-            <span class="shortcut-key">↓</span>
-          </div>
-          <div class="shortcut">
-            <span>清除輸出</span>
-            <span class="shortcut-key">Ctrl+L</span>
-          </div>
-          <div class="shortcut">
-            <span>新增標籤頁</span>
-            <span class="shortcut-key">Ctrl+T</span>
-          </div>
-          <div class="shortcut">
-            <span>關閉標籤頁</span>
-            <span class="shortcut-key">Ctrl+W</span>
-          </div>
-          <div class="shortcut">
-            <span>下一個標籤頁</span>
-            <span class="shortcut-key">Ctrl+Tab</span>
-          </div>
-          <div class="shortcut">
-            <span>上一個標籤頁</span>
-            <span class="shortcut-key">Ctrl+Shift+Tab</span>
-          </div>
-        </div>
-      </div>
     </div>
     
     <!-- 暫停確認對話框 -->
@@ -363,7 +276,6 @@ export default {
     // 全域狀態
     const isConnected = ref(false)
     const connectionStatus = ref('未連接')
-    const processes = reactive([])
     const showSettings = ref(false) // 控制設定面板顯示
     const pausedProcess = ref(null) // 當前暫停的進程信息
     const customResponse = ref('') // 自定義回應內容
@@ -380,9 +292,14 @@ export default {
       optimizeInteractiveCommands: true  // 優化交互式命令（如 top, htop）
     })
     
+    // 終端顯示內容
+    const terminalDisplay = ref('')
+    const currentCommand = ref('')
+    const commandHistoryIndex = ref(-1)
+    
     // DOM 引用
-    const commandInputRef = ref(null)
-    const outputArea = ref(null)
+    const terminalTextarea = ref(null)
+    const terminalContainer = ref(null)
     
     // WebSocket 連接
     let ws = null
@@ -391,6 +308,264 @@ export default {
     const currentTerminal = computed(() => {
       return terminals.find(t => t.id === activeTerminalId.value) || {}
     })
+    
+    // 判斷是否應該隱藏系統訊息
+    const shouldHideSystemMessage = (message) => {
+      const hidePatterns = [
+        '正在建立持久化終端連線',
+        '已連接到服務器',
+        '持久化終端已就緒',
+        '正在創建新的持久化終端',
+        '與服務器的連接已斷開',
+        '嘗試重新連接'
+      ]
+      
+      return hidePatterns.some(pattern => message.includes(pattern))
+    }
+
+    // 更新終端顯示內容
+    const updateTerminalDisplay = () => {
+      if (!currentTerminal.value || !currentTerminal.value.outputLines) return
+      
+      let content = ''
+      const lines = currentTerminal.value.outputLines
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        
+        // 過濾系統訊息
+        if (line.type === 'info' && shouldHideSystemMessage(line.message)) {
+          continue
+        }
+        
+        if (!settings.showSystemMessages && line.type !== 'stdout' && line.type !== 'stderr') {
+          continue
+        }
+        
+        let lineContent = line.message
+        // 移除所有 ANSI 轉義序列以簡化顯示
+        lineContent = stripAnsiEscapes(lineContent)
+        
+        // 檢查是否是最後一行且看起來像提示符（包含 $ 或 > 結尾）
+        const isLastLine = i === lines.length - 1
+        const looksLikePrompt = lineContent.trim().endsWith('$') || lineContent.trim().endsWith('>')
+        
+        content += lineContent
+        
+        // 如果不是最後一行，或者最後一行不像提示符，則添加換行
+        if (!isLastLine || !looksLikePrompt) {
+          content += '\n'
+        }
+      }
+      
+      // 添加當前輸入的命令（緊接在提示符後面）
+      if (currentCommand.value) {
+        content += currentCommand.value
+      }
+      
+      terminalDisplay.value = content
+      
+      // 自動滾動到底部
+      if (settings.autoScroll) {
+        nextTick(() => {
+          if (terminalTextarea.value) {
+            terminalTextarea.value.scrollTop = terminalTextarea.value.scrollHeight
+            // 將光標定位到最後
+            const textLength = terminalTextarea.value.value.length
+            terminalTextarea.value.setSelectionRange(textLength, textLength)
+          }
+        })
+      }
+    }
+    
+    // 處理終端鍵盤輸入
+    const handleTerminalKeydown = (event) => {
+      const textarea = terminalTextarea.value
+      if (!textarea || !isConnected.value) return
+      
+      // 計算可編輯區域的開始位置
+      const content = textarea.value
+      const lines = content.split('\n')
+      const lastLineIndex = lines.length - 1
+      const lastLine = lines[lastLineIndex] || ''
+      
+      // 找到最後一個真實的提示符位置（如 "resta@pi:~ $ "）
+      const promptMatch = lastLine.match(/.*[$#%>]\s*/)
+      const editableStartPos = promptMatch ? 
+        content.lastIndexOf(lastLine) + promptMatch[0].length : 
+        content.length
+      
+      // 特別處理 Backspace 鍵：防止刪除提示符或之前的內容
+      if (event.key === 'Backspace') {
+        const selectionStart = textarea.selectionStart
+        const selectionEnd = textarea.selectionEnd
+        
+        // 如果是選擇範圍刪除，檢查選擇範圍是否包含受保護區域
+        if (selectionStart !== selectionEnd) {
+          if (selectionStart < editableStartPos) {
+            event.preventDefault()
+            return
+          }
+        } else {
+          // 單純的 Backspace，檢查光標位置
+          if (selectionStart <= editableStartPos) {
+            event.preventDefault()
+            return
+          }
+        }
+      }
+      
+      // 特別處理 Delete 鍵：防止刪除提示符或之前的內容
+      if (event.key === 'Delete') {
+        const selectionStart = textarea.selectionStart
+        const selectionEnd = textarea.selectionEnd
+        
+        // 如果是選擇範圍刪除，檢查選擇範圍是否包含受保護區域
+        if (selectionStart !== selectionEnd) {
+          if (selectionStart < editableStartPos) {
+            event.preventDefault()
+            return
+          }
+        } else {
+          // 單純的 Delete，檢查光標位置
+          if (selectionStart < editableStartPos) {
+            event.preventDefault()
+            return
+          }
+        }
+      }
+      
+      // 處理其他編輯操作：防止在受保護區域輸入或編輯
+      const isOtherEditingKey = event.key.length === 1 || 
+                               (event.ctrlKey && (event.key === 'v' || event.key === 'x'))
+      
+      if (isOtherEditingKey && textarea.selectionStart < editableStartPos) {
+        event.preventDefault()
+        textarea.setSelectionRange(editableStartPos, editableStartPos)
+        return
+      }
+      
+      // 處理 Ctrl+A (全選)：只選擇可編輯區域
+      if (event.ctrlKey && event.key === 'a') {
+        event.preventDefault()
+        textarea.setSelectionRange(editableStartPos, content.length)
+        return
+      }
+      
+      // 提取當前命令（從可編輯位置開始到行尾）
+      currentCommand.value = lastLine.substring(promptMatch ? promptMatch[0].length : 0)
+      
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        
+        if (currentCommand.value.trim()) {
+          executeCommand()
+        } else {
+          // 空命令，直接添加新行
+          addOutputLine('info', '', currentTerminal.value.id)
+          updateTerminalDisplay()
+        }
+        
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        navigateHistory(-1)
+        
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        navigateHistory(1)
+        
+      } else if (event.ctrlKey && event.key === 'l') {
+        event.preventDefault()
+        clearOutput()
+        
+      } else if (event.ctrlKey && event.key === 'c') {
+        event.preventDefault()
+        // 模擬 Ctrl+C，發送中斷信號
+        addOutputLine('info', '^C', currentTerminal.value.id)
+        currentCommand.value = ''
+        updateTerminalDisplay()
+        
+      } else if (event.key === 'Home') {
+        // Home 鍵：移動到可編輯區域的開始
+        event.preventDefault()
+        textarea.setSelectionRange(editableStartPos, editableStartPos)
+        
+      } else if (event.key === 'End') {
+        // End 鍵：移動到行尾
+        event.preventDefault()
+        textarea.setSelectionRange(content.length, content.length)
+        
+      } else if (event.ctrlKey && event.key === 'Home') {
+        // Ctrl+Home：移動到可編輯區域的開始
+        event.preventDefault()
+        textarea.setSelectionRange(editableStartPos, editableStartPos)
+        
+      } else if (event.ctrlKey && event.key === 'End') {
+        // Ctrl+End：移動到文檔末尾
+        event.preventDefault()
+        textarea.setSelectionRange(content.length, content.length)
+        
+      }
+    }
+    
+    // 命令歷史導航
+    const navigateHistory = (direction) => {
+      const terminal = currentTerminal.value
+      if (!terminal || !terminal.commandHistory || terminal.commandHistory.length === 0) return
+      
+      if (direction === -1) { // 上一個命令
+        if (commandHistoryIndex.value === -1) {
+          commandHistoryIndex.value = terminal.commandHistory.length - 1
+        } else if (commandHistoryIndex.value > 0) {
+          commandHistoryIndex.value--
+        }
+      } else { // 下一個命令
+        if (commandHistoryIndex.value < terminal.commandHistory.length - 1) {
+          commandHistoryIndex.value++
+        } else {
+          commandHistoryIndex.value = -1
+          currentCommand.value = ''
+          updateTerminalDisplay()
+          return
+        }
+      }
+      
+      if (commandHistoryIndex.value >= 0) {
+        currentCommand.value = terminal.commandHistory[commandHistoryIndex.value]
+        updateTerminalDisplay()
+      }
+    }
+    
+    // 處理點擊事件
+    const handleTerminalClick = (event) => {
+      if (!terminalTextarea.value) return
+      
+      const textarea = terminalTextarea.value
+      const content = textarea.value
+      const lines = content.split('\n')
+      const lastLine = lines[lines.length - 1] || ''
+      
+      // 找到最後一個真實的提示符位置
+      const promptMatch = lastLine.match(/.*[$#%>]\s*/)
+      const editableStartPos = promptMatch ? 
+        content.lastIndexOf(lastLine) + promptMatch[0].length : 
+        content.length
+      
+      // 如果點擊在提示符之前的區域，將光標移到可編輯區域的開始
+      setTimeout(() => {
+        if (textarea.selectionStart < editableStartPos) {
+          textarea.setSelectionRange(editableStartPos, editableStartPos)
+        }
+      }, 0)
+    }
+    
+    // 將光標定位到末尾（用於其他地方調用）
+    const focusToEnd = () => {
+      if (terminalTextarea.value) {
+        const textLength = terminalTextarea.value.value.length
+        terminalTextarea.value.setSelectionRange(textLength, textLength)
+      }
+    }
     
     // 計算屬性：過濾後的輸出行
     const filteredOutputLines = computed(() => {
@@ -419,7 +594,7 @@ export default {
         outputLines: reactive([]),
         commandHistory: reactive([]),
         historyIndex: -1,
-        workingDirectory: 'C:\\',  // 默認工作目錄
+        workingDirectory: '',  // 默認工作目錄
         isReady: false  // 持久化終端是否就緒
       }
       
@@ -434,8 +609,6 @@ export default {
       
       // 如果已連接，為新終端創建持久化連線
       if (isConnected.value && ws) {
-        addOutputLine('info', '正在創建新的持久化終端...', newTerminal.id)
-        
         // 請求服務器創建持久化終端
         ws.send(JSON.stringify({
           type: 'create_terminal',
@@ -443,10 +616,12 @@ export default {
         }))
       }
       
-      // 聚焦輸入框
+      // 更新終端顯示並聚焦
       nextTick(() => {
-        if (commandInputRef.value) {
-          commandInputRef.value.focus()
+        updateTerminalDisplay()
+        if (terminalTextarea.value) {
+          terminalTextarea.value.focus()
+          focusToEnd()
         }
       })
     }
@@ -455,15 +630,12 @@ export default {
     const switchTerminal = (terminalId) => {
       activeTerminalId.value = terminalId
       
-      // 聚焦輸入框
+      // 更新終端顯示並聚焦
       nextTick(() => {
-        if (commandInputRef.value) {
-          commandInputRef.value.focus()
-        }
-        
-        // 滾動到輸出底部
-        if (outputArea.value) {
-          outputArea.value.scrollTop = outputArea.value.scrollHeight
+        updateTerminalDisplay()
+        if (terminalTextarea.value) {
+          terminalTextarea.value.focus()
+          focusToEnd()
         }
       })
     }
@@ -502,10 +674,10 @@ export default {
 
     // 生成命令提示符
     const getPromptText = () => {
-      if (!currentTerminal.value) return 'C:\\>'
+      if (!currentTerminal.value) return ''
       
       // 獲取當前目錄
-      const currentDir = currentTerminal.value.workingDirectory || 'C:\\'
+      const currentDir = currentTerminal.value.workingDirectory || ''
       
       // 縮短路徑顯示
       let displayPath = currentDir
@@ -524,6 +696,11 @@ export default {
     const initializeTerminals = () => {
       const firstTerminal = createTerminal('主終端')
       activeTerminalId.value = firstTerminal.id
+      
+      // 初始化終端顯示
+      nextTick(() => {
+        updateTerminalDisplay()
+      })
     }
     
     // 連接 WebSocket
@@ -544,8 +721,6 @@ export default {
         
         // 為所有終端創建持久化連線
         terminals.forEach(terminal => {
-          addOutputLine('info', '正在建立持久化終端連線...', terminal.id)
-          
           ws.send(JSON.stringify({
             type: 'create_terminal',
             terminalId: terminal.id
@@ -557,26 +732,17 @@ export default {
         isConnected.value = false
         connectionStatus.value = '連接已斷開'
         
-        // 為所有終端添加斷開訊息
-        terminals.forEach(terminal => {
-          addOutputLine('error', '與服務器的連接已斷開', terminal.id)
-        })
-        
-        // 自動重連
+        // 自動重連（移除訊息顯示）
         setTimeout(() => {
           if (!isConnected.value) {
-            terminals.forEach(terminal => {
-              addOutputLine('info', '嘗試重新連接...', terminal.id)
-            })
             connect()
           }
         }, 3000)
       }
       
       ws.onerror = (error) => {
-        terminals.forEach(terminal => {
-          addOutputLine('error', `連接錯誤: ${error.message || '未知錯誤'}`, terminal.id)
-        })
+        // 移除錯誤訊息顯示，讓終端更乾淨
+        console.error('WebSocket 連接錯誤:', error)
       }
       
       ws.onmessage = (event) => {
@@ -584,9 +750,8 @@ export default {
           const message = JSON.parse(event.data)
           handleServerMessage(message)
         } catch (error) {
-          terminals.forEach(terminal => {
-            addOutputLine('error', '收到無效的服務器消息', terminal.id)
-          })
+          // 移除無效訊息的顯示，記錄到控制台即可
+          console.error('收到無效的服務器消息:', error)
         }
       }
     }
@@ -614,9 +779,7 @@ export default {
           handleTerminalClosed(message)
           break
           
-        case 'process_list':
-          processes.splice(0, processes.length, ...serverProcesses)
-          break
+
           
         case 'pause_detected':
           handlePauseDetected(message)
@@ -672,18 +835,14 @@ export default {
         })
       }
       
-      // 如果是當前活躍終端且啟用自動滾動，則滾動到底部
-      if (targetTerminalId === activeTerminalId.value && settings.autoScroll) {
-        nextTick(() => {
-          if (outputArea.value) {
-            outputArea.value.scrollTop = outputArea.value.scrollHeight
-          }
-        })
-      }
-      
       // 限制輸出行數，避免記憶體過度使用
       if (terminal.outputLines.length > settings.maxOutputLines) {
         terminal.outputLines.splice(0, terminal.outputLines.length - settings.maxOutputLines)
+      }
+      
+      // 如果是當前活躍終端，更新終端顯示
+      if (targetTerminalId === activeTerminalId.value) {
+        updateTerminalDisplay()
       }
     }
     
@@ -697,7 +856,7 @@ export default {
         if (workingDirectory) {
           terminal.workingDirectory = workingDirectory
         }
-        addOutputLine('info', '✅ 持久化終端已就緒，可以開始執行命令', terminalId)
+        // 移除就緒訊息，讓終端更乾淨
       }
     }
     
@@ -708,7 +867,7 @@ export default {
       
       if (terminal) {
         terminal.isReady = false
-        addOutputLine('error', '❌ 持久化終端已關閉', terminalId)
+        // 移除關閉訊息，讓終端更乾淨
       }
     }
     
@@ -793,7 +952,7 @@ export default {
       const terminal = currentTerminal.value
       if (!terminal) return
       
-      const command = terminal.commandInput.trim()
+      const command = currentCommand.value.trim()
       
       if (!command || !isConnected.value) return
       
@@ -810,7 +969,7 @@ export default {
           terminal.commandHistory.shift()
         }
       }
-      terminal.historyIndex = -1
+      commandHistoryIndex.value = -1
       
       // 發送命令到服務器
       ws.send(JSON.stringify({
@@ -825,28 +984,11 @@ export default {
       // 在輸出中顯示執行的命令
       addOutputLine('info', `$ ${command}`, terminal.id)
       
-      // 清空輸入框
-      terminal.commandInput = ''
+      // 清空當前命令
+      currentCommand.value = ''
     }
     
-    // 終止進程
-    const killProcess = (processId) => {
-      if (!isConnected.value) return
-      
-      ws.send(JSON.stringify({
-        type: 'kill',
-        processId: processId
-      }))
-    }
-    
-    // 刷新進程列表
-    const refreshProcesses = () => {
-      if (!isConnected.value) return
-      
-      ws.send(JSON.stringify({
-        type: 'list'
-      }))
-    }
+
     
     // 清除當前終端輸出
     const clearOutput = () => {
@@ -921,10 +1063,26 @@ export default {
       return formatTime(line.timestamp)
     }
     
+    // 移除 ANSI 轉義序列的專用函數
+    const stripAnsiEscapes = (text) => {
+      return text
+        .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '') // 標準 ANSI 序列 (CSI)
+        .replace(/\x1b\[[?!><][0-9;]*[a-zA-Z]/g, '') // 私有模式序列（如 [?2004h）
+        .replace(/\x1b\][^\x07]*\x07/g, '') // OSC 序列以 BEL 結尾
+        .replace(/\x1b\][^\x1b]*\x1b\\/g, '') // OSC 序列以 ST 結尾
+        .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '') // DCS, SOS, PM, APC 序列
+        .replace(/\x1b[c-z]/g, '') // 單字符轉義序列
+        .replace(/\x1b[NO]/g, '') // SS2, SS3 序列
+        .replace(/\r/g, '') // 移除回車符
+    }
+
     // 格式化輸出內容
     const formatOutput = (message) => {
+      // 首先移除 ANSI 轉義序列
+      const cleanMessage = stripAnsiEscapes(message)
+
       // 基本的 HTML 轉義並保持換行
-      return message
+      return cleanMessage
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
@@ -987,18 +1145,6 @@ export default {
       // 連接 WebSocket
       connect()
       document.addEventListener('keydown', handleKeydown)
-      
-      // 自動刷新進程列表
-      const processRefreshInterval = setInterval(() => {
-        if (isConnected.value) {
-          refreshProcesses()
-        }
-      }, 5000)
-      
-      // 清理定時器
-      onUnmounted(() => {
-        clearInterval(processRefreshInterval)
-      })
     })
     
     onUnmounted(() => {
@@ -1020,34 +1166,26 @@ export default {
       // 全域狀態
       isConnected,
       connectionStatus,
-      processes,
       showSettings,
       settings,
       pausedProcess,
       customResponse,
       systemInfo,
       
-      // 計算屬性
-      filteredOutputLines,
-      
-      // DOM 引用
-      commandInputRef,
-      outputArea,
+      // 終端顯示
+      terminalDisplay,
+      terminalTextarea,
+      terminalContainer,
       
       // 方法
       executeCommand,
-      killProcess,
-      refreshProcesses,
       clearOutput,
-      previousCommand,
-      nextCommand,
+      handleTerminalKeydown,
+      handleTerminalClick,
+      focusToEnd,
+      updateTerminalDisplay,
       formatTime,
-      getTimestampDisplay,
-      formatOutput,
       getPromptText,
-      updateWorkingDirectory,
-      handleTerminalReady,
-      handleTerminalClosed,
       
       // 設定相關方法
       toggleSettings,

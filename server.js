@@ -37,12 +37,7 @@ wss.on('connection', (ws) => {
     terminals: new Map() // 支援多終端，每個終端有自己的持久 PTY
   });
   
-  // 發送歡迎消息
-  ws.send(JSON.stringify({
-    type: 'info',
-    message: '已連接到服務器，可以開始執行命令',
-    timestamp: new Date().toISOString()
-  }));
+  // 移除歡迎消息，讓終端更乾淨
 
   ws.on('message', (data) => {
     try {
