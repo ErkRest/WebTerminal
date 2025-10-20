@@ -66,6 +66,9 @@
             v-model="terminalDisplay"
             @keydown="handleTerminalKeydown"
             @click="handleTerminalClick"
+            @mousedown="handleMouseDown"
+            @mouseup="handleMouseUp"
+            @select="handleTextSelect"
             :disabled="!isConnected"
             class="terminal-textarea"
             spellcheck="false"
@@ -283,7 +286,7 @@ export default {
     
     // 設定管理
     const settings = reactive({
-      showSystemMessages: true,    // 顯示系統消息
+      showSystemMessages: false,   // 顯示系統消息
       showTimestamp: true,         // 顯示時間戳記
       autoScroll: true,            // 自動滾動
       fontSize: 14,                // 字體大小
@@ -317,7 +320,11 @@ export default {
         '持久化終端已就緒',
         '正在創建新的持久化終端',
         '與服務器的連接已斷開',
-        '嘗試重新連接'
+        '嘗試重新連接',
+        '執行命令:',           // 隱藏執行命令的系統提示
+        '進程結束，退出碼:',    // 隱藏進程結束提示
+        '程序已暫停',          // 隱藏暫停提示
+        '等待用戶輸入'         // 隱藏等待輸入提示
       ]
       
       return hidePatterns.some(pattern => message.includes(pattern))
@@ -365,16 +372,35 @@ export default {
       
       terminalDisplay.value = content
       
-      // 自動滾動到底部
+      // 確保游標始終在底部並保持滾動
+      nextTick(() => {
+        ensureCursorAtBottom()
+      })
+    }
+    
+    // 確保游標和視窗始終在底部的函數
+    const ensureCursorAtBottom = () => {
+      if (!terminalTextarea.value) return
+      
+      const textarea = terminalTextarea.value
+      const textLength = textarea.value.length
+      
+      // 將光標定位到最後
+      textarea.setSelectionRange(textLength, textLength)
+      
+      // 強制滾動到底部
       if (settings.autoScroll) {
-        nextTick(() => {
-          if (terminalTextarea.value) {
-            terminalTextarea.value.scrollTop = terminalTextarea.value.scrollHeight
-            // 將光標定位到最後
-            const textLength = terminalTextarea.value.value.length
-            terminalTextarea.value.setSelectionRange(textLength, textLength)
-          }
-        })
+        textarea.scrollTop = textarea.scrollHeight
+        
+        // 再次確保滾動到底部（有時需要雙重確保）
+        setTimeout(() => {
+          textarea.scrollTop = textarea.scrollHeight
+        }, 10)
+      }
+      
+      // 確保 textarea 獲得焦點以顯示游標
+      if (document.activeElement !== textarea) {
+        textarea.focus()
       }
     }
     
@@ -476,14 +502,101 @@ export default {
         
       } else if (event.ctrlKey && event.key === 'l') {
         event.preventDefault()
+        event.stopPropagation() // 阻止事件冒泡到全域處理器
         clearOutput()
         
       } else if (event.ctrlKey && event.key === 'c') {
         event.preventDefault()
+        event.stopPropagation() // 阻止事件冒泡
         // 模擬 Ctrl+C，發送中斷信號
         addOutputLine('info', '^C', currentTerminal.value.id)
         currentCommand.value = ''
         updateTerminalDisplay()
+        
+      } else if (event.ctrlKey && event.key === 't') {
+        // Ctrl+T 在終端中應該創建新標籤頁，阻止瀏覽器默認行為
+        event.preventDefault()
+        event.stopPropagation()
+        createNewTerminal()
+        
+      } else if (event.ctrlKey && event.key === 'w') {
+        // Ctrl+W 在終端中應該關閉當前標籤頁，阻止瀏覽器關閉標籤頁
+        event.preventDefault()
+        event.stopPropagation()
+        if (terminals.length > 1) {
+          closeTerminal(activeTerminalId.value)
+        }
+        
+      } else if (event.ctrlKey && event.key === ',') {
+        // Ctrl+, 開啟設定面板
+        event.preventDefault()
+        event.stopPropagation()
+        toggleSettings()
+        
+      } else if (event.ctrlKey && event.key === 'Tab') {
+        // Ctrl+Tab 切換終端標籤頁，阻止瀏覽器標籤頁切換
+        event.preventDefault()
+        event.stopPropagation()
+        const currentIndex = terminals.findIndex(t => t.id === activeTerminalId.value)
+        const nextIndex = (currentIndex + 1) % terminals.length
+        switchTerminal(terminals[nextIndex].id)
+        
+      } else if (event.ctrlKey && event.shiftKey && event.key === 'Tab') {
+        // Ctrl+Shift+Tab 切換到上一個終端標籤頁
+        event.preventDefault()
+        event.stopPropagation()
+        const currentIndex = terminals.findIndex(t => t.id === activeTerminalId.value)
+        const prevIndex = currentIndex === 0 ? terminals.length - 1 : currentIndex - 1
+        switchTerminal(terminals[prevIndex].id)
+        
+      } else if (event.ctrlKey && event.key === 'd') {
+        // Ctrl+D 模擬 EOF
+        event.preventDefault()
+        event.stopPropagation()
+        if (currentCommand.value.trim() === '') {
+          addOutputLine('info', 'exit', currentTerminal.value.id)
+          updateTerminalDisplay()
+        }
+        
+      } else if (event.ctrlKey && event.key === 'u') {
+        // Ctrl+U 清除當前行（從光標到行首）
+        event.preventDefault()
+        event.stopPropagation()
+        const textarea = terminalTextarea.value
+        const lines = content.split('\n')
+        const lastLine = lines[lines.length - 1] || ''
+        const promptMatch = lastLine.match(/.*[$#%>]\s*/)
+        const promptLength = promptMatch ? promptMatch[0].length : 0
+        
+        // 重建最後一行，只保留提示符
+        lines[lines.length - 1] = lastLine.substring(0, promptLength)
+        textarea.value = lines.join('\n')
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+        currentCommand.value = ''
+        
+      } else if (event.ctrlKey && event.key === 'k') {
+        // Ctrl+K 清除從光標到行尾的內容
+        event.preventDefault()
+        event.stopPropagation()
+        const textarea = terminalTextarea.value
+        const cursorPos = textarea.selectionStart
+        const lines = content.split('\n')
+        const lastLine = lines[lines.length - 1] || ''
+        const lineStart = content.lastIndexOf(lastLine)
+        
+        if (cursorPos >= lineStart) {
+          const newContent = content.substring(0, cursorPos)
+          textarea.value = newContent
+          textarea.setSelectionRange(cursorPos, cursorPos)
+          
+          // 更新 currentCommand
+          const promptMatch = lastLine.match(/.*[$#%>]\s*/)
+          const promptLength = promptMatch ? promptMatch[0].length : 0
+          const relativePos = cursorPos - lineStart
+          if (relativePos >= promptLength) {
+            currentCommand.value = lastLine.substring(promptLength, relativePos)
+          }
+        }
         
       } else if (event.key === 'Home') {
         // Home 鍵：移動到可編輯區域的開始
@@ -551,20 +664,52 @@ export default {
         content.lastIndexOf(lastLine) + promptMatch[0].length : 
         content.length
       
-      // 如果點擊在提示符之前的區域，將光標移到可編輯區域的開始
-      setTimeout(() => {
+      // 使用 nextTick 來確保在 DOM 更新後檢查
+      nextTick(() => {
+        // 檢查用戶是否正在進行選取操作
+        const hasSelection = textarea.selectionStart !== textarea.selectionEnd
+        const isCurrentlySelecting = isMouseSelecting.value
+        const timeSinceMouseDown = Date.now() - selectionStartTime.value
+        
+        // 如果用戶正在選取文字或剛完成選取操作，不要干擾
+        if (hasSelection || isCurrentlySelecting || timeSinceMouseDown < 100) {
+          return
+        }
+        
+        // 如果單純點擊在提示符之前的區域，才將光標移到可編輯區域
         if (textarea.selectionStart < editableStartPos) {
           textarea.setSelectionRange(editableStartPos, editableStartPos)
         }
-      }, 0)
+      })
+    }
+    
+    // 滑鼠選取相關的狀態
+    const isMouseSelecting = ref(false)
+    const selectionStartTime = ref(0)
+    
+    // 處理滑鼠按下事件
+    const handleMouseDown = (event) => {
+      isMouseSelecting.value = true
+      selectionStartTime.value = Date.now()
+    }
+    
+    // 處理滑鼠釋放事件
+    const handleMouseUp = (event) => {
+      // 給一個小延遲來確保選取操作完成
+      setTimeout(() => {
+        isMouseSelecting.value = false
+      }, 10)
+    }
+    
+    // 處理文字選取事件
+    const handleTextSelect = (event) => {
+      // 這個事件會在選取改變時觸發
+      // 不需要特別處理，只是為了標記有選取操作發生
     }
     
     // 將光標定位到末尾（用於其他地方調用）
     const focusToEnd = () => {
-      if (terminalTextarea.value) {
-        const textLength = terminalTextarea.value.value.length
-        terminalTextarea.value.setSelectionRange(textLength, textLength)
-      }
+      ensureCursorAtBottom()
     }
     
     // 計算屬性：過濾後的輸出行
@@ -809,10 +954,32 @@ export default {
       
       if (!terminal) return
       
+      // 檢查是否為重複的命令回顯
+      if (type === 'stdout' && message.trim()) {
+        const recentLines = terminal.outputLines.slice(-3) // 檢查最近3行
+        const duplicateFound = recentLines.some(line => 
+          line.type === 'stdout' && 
+          line.message.trim() === message.trim() &&
+          (new Date() - line.timestamp) < 1000 // 1秒內的重複
+        )
+        
+        if (duplicateFound) {
+          return // 跳過重複的命令回顯
+        }
+      }
+      
       // 處理多行輸出：如果是 stdout 或 stderr，並且包含換行符，則分別處理每一行
       if ((type === 'stdout' || type === 'stderr') && typeof message === 'string' && message.includes('\n')) {
         const lines = message.split('\n')
         const baseTimestamp = new Date()
+        
+        // 調試：檢查是否有長行被截斷
+        if (type === 'stdout') {
+          const longLines = lines.filter(line => line.length > 100)
+          if (longLines.length > 0) {
+            console.log('檢測到長行:', longLines.map(line => `長度: ${line.length}, 內容: ${line.substring(0, 50)}...`))
+          }
+        }
         
         lines.forEach((line, index) => {
           // 跳過空行，除非它是唯一的行
@@ -840,9 +1007,13 @@ export default {
         terminal.outputLines.splice(0, terminal.outputLines.length - settings.maxOutputLines)
       }
       
-      // 如果是當前活躍終端，更新終端顯示
+      // 如果是當前活躍終端，更新終端顯示並確保游標在底部
       if (targetTerminalId === activeTerminalId.value) {
         updateTerminalDisplay()
+        // 延遲確保游標在底部，給 DOM 更新時間
+        nextTick(() => {
+          ensureCursorAtBottom()
+        })
       }
     }
     
@@ -907,7 +1078,7 @@ export default {
     const resetSettings = () => {
       // 重設為預設值
       Object.assign(settings, {
-        showSystemMessages: true,
+        showSystemMessages: false,
         showTimestamp: true,
         autoScroll: true,
         fontSize: 14,
@@ -981,11 +1152,14 @@ export default {
         }
       }))
       
-      // 在輸出中顯示執行的命令
-      addOutputLine('info', `$ ${command}`, terminal.id)
-      
       // 清空當前命令
       currentCommand.value = ''
+      
+      // 更新顯示並確保游標在底部
+      updateTerminalDisplay()
+      nextTick(() => {
+        ensureCursorAtBottom()
+      })
     }
     
 
@@ -1093,6 +1267,81 @@ export default {
     
     // 鍵盤快捷鍵
     const handleKeydown = (event) => {
+      // 檢查當前 focus 的元素
+      const activeElement = document.activeElement
+      const isTextareaFocused = activeElement && activeElement.tagName === 'TEXTAREA'
+      const isInputFocused = activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'SELECT')
+      
+      // 如果在輸入框或選擇框中，只處理特定的快捷鍵
+      if (isInputFocused) {
+        // 在輸入框中，只允許 Escape 鍵來關閉設定面板
+        if (event.key === 'Escape' && showSettings.value) {
+          event.preventDefault()
+          event.stopPropagation()
+          toggleSettings()
+        }
+        return
+      }
+      
+      // 處理 textarea 中的快捷鍵（需要更積極地阻止瀏覽器默認行為）
+      if (isTextareaFocused) {
+        // Ctrl+L: 清除當前終端輸出
+        if (event.ctrlKey && event.key === 'l') {
+          event.preventDefault()
+          event.stopPropagation()
+          clearOutput()
+          return
+        }
+        
+        // Ctrl+T: 創建新終端標籤頁
+        if (event.ctrlKey && event.key === 't') {
+          event.preventDefault()
+          event.stopPropagation()
+          createNewTerminal()
+          return
+        }
+        
+        // Ctrl+,: 開啟設定面板
+        if (event.ctrlKey && event.key === ',') {
+          event.preventDefault()
+          event.stopPropagation()
+          toggleSettings()
+          return
+        }
+        
+        // Ctrl+W: 關閉當前終端標籤頁（但不是瀏覽器標籤頁）
+        if (event.ctrlKey && event.key === 'w') {
+          event.preventDefault()
+          event.stopPropagation()
+          closeTerminal(activeTerminalId.value)
+          return
+        }
+        
+        // Ctrl+Tab: 切換到下一個終端標籤頁
+        if (event.ctrlKey && event.key === 'Tab' && !event.shiftKey) {
+          event.preventDefault()
+          event.stopPropagation()
+          const currentIndex = terminals.findIndex(t => t.id === activeTerminalId.value)
+          const nextIndex = (currentIndex + 1) % terminals.length
+          switchTerminal(terminals[nextIndex].id)
+          return
+        }
+        
+        // Ctrl+Shift+Tab: 切換到上一個終端標籤頁
+        if (event.ctrlKey && event.shiftKey && event.key === 'Tab') {
+          event.preventDefault()
+          event.stopPropagation()
+          const currentIndex = terminals.findIndex(t => t.id === activeTerminalId.value)
+          const prevIndex = currentIndex === 0 ? terminals.length - 1 : currentIndex - 1
+          switchTerminal(terminals[prevIndex].id)
+          return
+        }
+        
+        // 其他情況下，讓 textarea 自己處理按鍵
+        return
+      }
+      
+      // 非輸入元素的快捷鍵處理
       // Ctrl+L: 清除當前終端輸出
       if (event.ctrlKey && event.key === 'l') {
         event.preventDefault()
@@ -1132,7 +1381,65 @@ export default {
         const prevIndex = currentIndex === 0 ? terminals.length - 1 : currentIndex - 1
         switchTerminal(terminals[prevIndex].id)
       }
+      
+      // Escape: 關閉設定面板
+      if (event.key === 'Escape' && showSettings.value) {
+        event.preventDefault()
+        toggleSettings()
+      }
     }
+    
+    // 計算合適的終端大小
+    const calculateTerminalSize = () => {
+      if (!terminalTextarea.value) return { cols: 140, rows: 30 }
+      
+      const textarea = terminalTextarea.value
+      const styles = window.getComputedStyle(textarea)
+      const fontSize = parseFloat(styles.fontSize)
+      const lineHeight = parseFloat(styles.lineHeight) || fontSize * 1.4
+      
+      // 計算字符寬度 (大約是字體大小的 0.6 倍)
+      const charWidth = fontSize * 0.6
+      
+      // 獲取可用空間
+      const availableWidth = textarea.clientWidth - 30 // 減去 padding
+      const availableHeight = textarea.clientHeight - 30 // 減去 padding
+      
+      // 計算列數和行數
+      const cols = Math.floor(availableWidth / charWidth)
+      const rows = Math.floor(availableHeight / lineHeight)
+      
+      return {
+        cols: Math.max(80, Math.min(cols, 200)), // 限制在 80-200 之間
+        rows: Math.max(24, Math.min(rows, 50))   // 限制在 24-50 之間
+      }
+    }
+    
+    // 調整終端大小
+    const resizeTerminal = (terminalId = null) => {
+      if (!ws || !isConnected.value) return
+      
+      const size = calculateTerminalSize()
+      const targetTerminalId = terminalId || activeTerminalId.value
+      
+      ws.send(JSON.stringify({
+        type: 'resize',
+        terminalId: targetTerminalId,
+        cols: size.cols,
+        rows: size.rows
+      }))
+    }
+    
+    // 處理視窗大小改變
+    const handleWindowResize = () => {
+      // 延遲調整，避免頻繁調用
+      clearTimeout(resizeTimeout.value)
+      resizeTimeout.value = setTimeout(() => {
+        resizeTerminal()
+      }, 300)
+    }
+    
+    const resizeTimeout = ref(null)
     
     // 生命週期
     onMounted(() => {
@@ -1144,11 +1451,27 @@ export default {
       
       // 連接 WebSocket
       connect()
-      document.addEventListener('keydown', handleKeydown)
+      
+      // 使用 capture 模式來確保我們的處理器在其他處理器之前執行
+      document.addEventListener('keydown', handleKeydown, { capture: true })
+      
+      // 監聽視窗大小改變
+      window.addEventListener('resize', handleWindowResize)
+      
+      // 初始調整終端大小
+      nextTick(() => {
+        setTimeout(() => {
+          resizeTerminal()
+        }, 1000) // 等待 WebSocket 連接穩定
+      })
     })
     
     onUnmounted(() => {
-      document.removeEventListener('keydown', handleKeydown)
+      document.removeEventListener('keydown', handleKeydown, { capture: true })
+      window.removeEventListener('resize', handleWindowResize)
+      if (resizeTimeout.value) {
+        clearTimeout(resizeTimeout.value)
+      }
       if (ws) {
         ws.close()
       }
@@ -1182,10 +1505,16 @@ export default {
       clearOutput,
       handleTerminalKeydown,
       handleTerminalClick,
+      handleMouseDown,
+      handleMouseUp,
+      handleTextSelect,
       focusToEnd,
+      ensureCursorAtBottom,
       updateTerminalDisplay,
       formatTime,
       getPromptText,
+      resizeTerminal,
+      calculateTerminalSize,
       
       // 設定相關方法
       toggleSettings,

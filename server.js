@@ -125,6 +125,10 @@ function handleCommand(ws, message) {
       getSystemInfo(ws);
       break;
       
+    case 'resize':
+      resizeTerminal(ws, message);
+      break;
+      
     default:
       ws.send(JSON.stringify({
         type: 'error',
@@ -171,8 +175,8 @@ function createPersistentTerminal(ws, message) {
     // 創建持久的 PTY 進程
     const ptyProcess = pty.spawn(isWindows ? 'cmd.exe' : '/bin/bash', [], {
       name: 'xterm-color',
-      cols: 80,
-      rows: 24,
+      cols: 140,  // 增加列數以顯示更多內容
+      rows: 30,   // 也增加行數
       cwd: defaultWorkingDir,
       env: {
         ...process.env,
@@ -284,6 +288,55 @@ function closePersistentTerminal(ws, message) {
   }
 }
 
+// 調整終端大小
+function resizeTerminal(ws, message) {
+  const { terminalId, cols, rows } = message;
+  const clientState = clients.get(ws.id);
+  
+  if (!clientState) return;
+  
+  const currentTerminalId = terminalId || 'default';
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  
+  if (!terminalState || !terminalState.ptyProcess) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: '終端不存在或已關閉',
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+  
+  try {
+    // 設置默認值
+    const newCols = cols || 140;
+    const newRows = rows || 30;
+    
+    // 調整 PTY 大小
+    terminalState.ptyProcess.resize(newCols, newRows);
+    
+    ws.send(JSON.stringify({
+      type: 'terminal_resized',
+      terminalId: currentTerminalId,
+      cols: newCols,
+      rows: newRows,
+      message: `終端大小已調整為 ${newCols}x${newRows}`,
+      timestamp: new Date().toISOString()
+    }));
+    
+    console.log(`終端 ${currentTerminalId} 大小已調整為 ${newCols}x${newRows}`);
+    
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: `調整終端大小失敗: ${error.message}`,
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
 // 檢測是否需要 TTY 的命令
 function needsTTY(command) {
   const parts = command.trim().split(' ');
@@ -375,7 +428,7 @@ function executeCommandWithPTY(ws, message) {
     const cmdName = command.trim().split(' ')[0];
     if (cmdName === 'top') {
       env.TERM = 'dumb'; // 使用簡單終端模式
-      env.COLUMNS = '80';
+      env.COLUMNS = '140';
       env.LINES = '24';
     } else if (['less', 'more', 'man'].includes(cmdName)) {
       env.PAGER = 'cat'; // 禁用分頁
@@ -386,8 +439,8 @@ function executeCommandWithPTY(ws, message) {
     const ptyProcess = pty.spawn(isWindows ? 'cmd.exe' : 'bash', 
       isWindows ? ['/c', command] : ['-c', command], {
       name: 'xterm-color',
-      cols: 80,
-      rows: 24,
+      cols: 140,  // 增加列數以顯示更多內容
+      rows: 30,   // 也增加行數
       cwd: currentWorkingDir,
       env: env
     });
