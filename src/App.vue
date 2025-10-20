@@ -419,7 +419,8 @@ export default {
         outputLines: reactive([]),
         commandHistory: reactive([]),
         historyIndex: -1,
-        workingDirectory: 'C:\\'  // 默認工作目錄
+        workingDirectory: 'C:\\',  // 默認工作目錄
+        isReady: false  // 持久化終端是否就緒
       }
       
       terminals.push(terminal)
@@ -431,9 +432,15 @@ export default {
       const newTerminal = createTerminal()
       switchTerminal(newTerminal.id)
       
-      // 如果已連接，為新終端添加歡迎訊息
-      if (isConnected.value) {
-        addOutputLine('info', '新終端已創建', newTerminal.id)
+      // 如果已連接，為新終端創建持久化連線
+      if (isConnected.value && ws) {
+        addOutputLine('info', '正在創建新的持久化終端...', newTerminal.id)
+        
+        // 請求服務器創建持久化終端
+        ws.send(JSON.stringify({
+          type: 'create_terminal',
+          terminalId: newTerminal.id
+        }))
       }
       
       // 聚焦輸入框
@@ -467,6 +474,14 @@ export default {
       
       const terminalIndex = terminals.findIndex(t => t.id === terminalId)
       if (terminalIndex === -1) return
+      
+      // 通知服務器關閉持久化終端
+      if (isConnected.value && ws) {
+        ws.send(JSON.stringify({
+          type: 'close_terminal',
+          terminalId: terminalId
+        }))
+      }
       
       terminals.splice(terminalIndex, 1)
       
@@ -527,9 +542,14 @@ export default {
           type: 'get_system_info'
         }))
         
-        // 為所有終端添加連接訊息
+        // 為所有終端創建持久化連線
         terminals.forEach(terminal => {
-          addOutputLine('info', '已連接到服務器', terminal.id)
+          addOutputLine('info', '正在建立持久化終端連線...', terminal.id)
+          
+          ws.send(JSON.stringify({
+            type: 'create_terminal',
+            terminalId: terminal.id
+          }))
         })
       }
       
@@ -573,7 +593,7 @@ export default {
     
     // 處理服務器消息
     const handleServerMessage = (message) => {
-      const { type, data, processes: serverProcesses } = message
+      const { type, data, processes: serverProcesses, terminalId } = message
       
       switch (type) {
         case 'info':
@@ -581,8 +601,17 @@ export default {
         case 'stdout':
         case 'stderr':
         case 'close':
-          // 將訊息添加到當前活躍終端
-          addOutputLine(type, message.message || data || '無消息內容', activeTerminalId.value, message.processId)
+          // 將訊息添加到指定終端或當前活躍終端
+          const targetTerminalId = terminalId || message.terminalId || activeTerminalId.value
+          addOutputLine(type, message.message || data || '無消息內容', targetTerminalId, message.processId)
+          break
+          
+        case 'terminal_ready':
+          handleTerminalReady(message)
+          break
+          
+        case 'terminal_closed':
+          handleTerminalClosed(message)
           break
           
         case 'process_list':
@@ -655,6 +684,31 @@ export default {
       // 限制輸出行數，避免記憶體過度使用
       if (terminal.outputLines.length > settings.maxOutputLines) {
         terminal.outputLines.splice(0, terminal.outputLines.length - settings.maxOutputLines)
+      }
+    }
+    
+    // 處理終端就緒事件
+    const handleTerminalReady = (message) => {
+      const { terminalId, workingDirectory } = message
+      const terminal = terminals.find(t => t.id === terminalId)
+      
+      if (terminal) {
+        terminal.isReady = true
+        if (workingDirectory) {
+          terminal.workingDirectory = workingDirectory
+        }
+        addOutputLine('info', '✅ 持久化終端已就緒，可以開始執行命令', terminalId)
+      }
+    }
+    
+    // 處理終端關閉事件
+    const handleTerminalClosed = (message) => {
+      const { terminalId } = message
+      const terminal = terminals.find(t => t.id === terminalId)
+      
+      if (terminal) {
+        terminal.isReady = false
+        addOutputLine('error', '❌ 持久化終端已關閉', terminalId)
       }
     }
     
@@ -742,6 +796,12 @@ export default {
       const command = terminal.commandInput.trim()
       
       if (!command || !isConnected.value) return
+      
+      // 檢查終端是否就緒
+      if (!terminal.isReady) {
+        addOutputLine('error', '⚠️ 終端未就緒，請稍候再試', terminal.id)
+        return
+      }
       
       // 添加到當前終端的命令歷史
       if (terminal.commandHistory[terminal.commandHistory.length - 1] !== command) {
@@ -986,6 +1046,8 @@ export default {
       formatOutput,
       getPromptText,
       updateWorkingDirectory,
+      handleTerminalReady,
+      handleTerminalClosed,
       
       // 設定相關方法
       toggleSettings,

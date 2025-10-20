@@ -21,6 +21,7 @@ app.use(serve(path.join(__dirname, 'dist')));
 const clients = new Map(); // 改為 Map 來存儲客戶端狀態
 const processes = new Map(); // 存儲活躍的進程
 const pausedProcesses = new Map(); // 存儲暫停中的進程
+const terminalPTYs = new Map(); // 存儲持久化的 PTY 終端
 
 wss.on('connection', (ws) => {
   console.log('新的 WebSocket 連接已建立');
@@ -33,7 +34,7 @@ wss.on('connection', (ws) => {
   clients.set(ws.id, {
     ws: ws,
     workingDirectory: defaultWorkingDir, // 使用安全的默認工作目錄
-    terminals: new Map() // 支援多終端，每個終端有自己的工作目錄
+    terminals: new Map() // 支援多終端，每個終端有自己的持久 PTY
   });
   
   // 發送歡迎消息
@@ -77,6 +78,21 @@ wss.on('connection', (ws) => {
       }
     }
     
+    // 清理該客戶端的持久 PTY 終端
+    const clientState = clients.get(ws.id);
+    if (clientState) {
+      for (const [terminalId, terminalState] of clientState.terminals) {
+        if (terminalState.ptyProcess) {
+          try {
+            terminalState.ptyProcess.kill();
+            console.log(`已關閉持久 PTY 終端: ${terminalId}`);
+          } catch (error) {
+            console.error(`關閉持久 PTY 終端 ${terminalId} 失敗:`, error);
+          }
+        }
+      }
+    }
+    
     // 從客戶端列表中移除
     clients.delete(ws.id);
   });
@@ -88,6 +104,14 @@ function handleCommand(ws, message) {
   switch (type) {
     case 'execute':
       executeCommand(ws, message);
+      break;
+      
+    case 'create_terminal':
+      createPersistentTerminal(ws, message);
+      break;
+      
+    case 'close_terminal':
+      closePersistentTerminal(ws, message);
       break;
       
     case 'kill':
@@ -112,6 +136,156 @@ function handleCommand(ws, message) {
         message: `未知的命令類型: ${type}`,
         timestamp: new Date().toISOString()
       }));
+  }
+}
+
+// 創建持久化終端
+function createPersistentTerminal(ws, message) {
+  const { terminalId } = message;
+  const clientState = clients.get(ws.id);
+  
+  if (!clientState) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: '客戶端狀態不存在',
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+
+  const currentTerminalId = terminalId || 'default';
+  
+  // 檢查是否已經存在該終端
+  if (clientState.terminals.has(currentTerminalId) && 
+      clientState.terminals.get(currentTerminalId).ptyProcess) {
+    ws.send(JSON.stringify({
+      type: 'terminal_ready',
+      terminalId: currentTerminalId,
+      message: '終端已經存在並準備就緒',
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+
+  const isWindows = process.platform === 'win32';
+  const defaultWorkingDir = clientState.workingDirectory;
+  
+  console.log(`創建持久化終端: ${currentTerminalId}, 工作目錄: ${defaultWorkingDir}`);
+  
+  try {
+    // 創建持久的 PTY 進程
+    const ptyProcess = pty.spawn(isWindows ? 'cmd.exe' : '/bin/bash', [], {
+      name: 'xterm-color',
+      cols: 80,
+      rows: 24,
+      cwd: defaultWorkingDir,
+      env: {
+        ...process.env,
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor'
+      }
+    });
+
+    // 初始化或更新終端狀態
+    const terminalState = {
+      workingDirectory: defaultWorkingDir,
+      ptyProcess: ptyProcess,
+      commandHistory: [],
+      isReady: true
+    };
+    
+    clientState.terminals.set(currentTerminalId, terminalState);
+
+    // 處理 PTY 輸出
+    ptyProcess.onData((data) => {
+      ws.send(JSON.stringify({
+        type: 'stdout',
+        data: data,
+        terminalId: currentTerminalId,
+        timestamp: new Date().toISOString()
+      }));
+    });
+
+    // 處理 PTY 結束（意外退出）
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      console.log(`持久終端 ${currentTerminalId} 意外退出，退出碼: ${exitCode}`);
+      
+      // 清理終端狀態
+      if (clientState.terminals.has(currentTerminalId)) {
+        const terminalState = clientState.terminals.get(currentTerminalId);
+        terminalState.ptyProcess = null;
+        terminalState.isReady = false;
+      }
+      
+      ws.send(JSON.stringify({
+        type: 'terminal_closed',
+        terminalId: currentTerminalId,
+        message: `終端意外關閉，退出碼: ${exitCode}${signal ? `, 信號: ${signal}` : ''}`,
+        exitCode: exitCode,
+        timestamp: new Date().toISOString()
+      }));
+    });
+
+    // 發送終端就緒通知
+    ws.send(JSON.stringify({
+      type: 'terminal_ready',
+      terminalId: currentTerminalId,
+      message: '持久化終端已創建並準備就緒',
+      workingDirectory: defaultWorkingDir,
+      timestamp: new Date().toISOString()
+    }));
+
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: `創建持久化終端失敗: ${error.message}`,
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
+  }
+}
+
+// 關閉持久化終端
+function closePersistentTerminal(ws, message) {
+  const { terminalId } = message;
+  const clientState = clients.get(ws.id);
+  
+  if (!clientState) return;
+  
+  const currentTerminalId = terminalId || 'default';
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  
+  if (!terminalState || !terminalState.ptyProcess) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: '終端不存在或已關閉',
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+  
+  try {
+    terminalState.ptyProcess.kill();
+    terminalState.ptyProcess = null;
+    terminalState.isReady = false;
+    
+    ws.send(JSON.stringify({
+      type: 'terminal_closed',
+      terminalId: currentTerminalId,
+      message: '終端已關閉',
+      timestamp: new Date().toISOString()
+    }));
+    
+    console.log(`已關閉持久化終端: ${currentTerminalId}`);
+    
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: `關閉終端失敗: ${error.message}`,
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
   }
 }
 
@@ -287,7 +461,6 @@ function executeCommand(ws, message) {
     return;
   }
 
-  const processId = Math.random().toString(36).substr(2, 9);
   const clientState = clients.get(ws.id);
   
   if (!clientState) {
@@ -299,48 +472,97 @@ function executeCommand(ws, message) {
     return;
   }
 
-  // 獲取或初始化終端的工作目錄
   const currentTerminalId = terminalId || 'default';
+  
+  // 確保終端存在，如果不存在則創建
   if (!clientState.terminals.has(currentTerminalId)) {
-    clientState.terminals.set(currentTerminalId, {
-      workingDirectory: clientState.workingDirectory
-    });
+    createPersistentTerminal(ws, { terminalId: currentTerminalId });
+    // 等待終端創建完成再執行命令
+    setTimeout(() => executeCommandInPersistentTerminal(ws, message), 500);
+    return;
   }
   
   const terminalState = clientState.terminals.get(currentTerminalId);
-  const currentWorkingDir = terminalState.workingDirectory;
   
-  // 判斷操作系統並使用相應的 shell
-  const isWindows = process.platform === 'win32';
-  
-  // 特殊處理 cd 命令
-  if (command.trim().startsWith('cd ')) {
-    handleCdCommand(ws, command.trim(), currentTerminalId, processId);
+  // 檢查 PTY 是否就緒
+  if (!terminalState.ptyProcess || !terminalState.isReady) {
+    // 重新創建終端
+    createPersistentTerminal(ws, { terminalId: currentTerminalId });
+    // 等待終端創建完成再執行命令
+    setTimeout(() => executeCommandInPersistentTerminal(ws, message), 500);
     return;
   }
   
-  // 檢查是否需要 TTY
-  if (needsTTY(command)) {
-    const { options = {} } = message;
+  executeCommandInPersistentTerminal(ws, message);
+}
+
+// 在持久終端中執行命令
+function executeCommandInPersistentTerminal(ws, message) {
+  const { command, terminalId } = message;
+  const clientState = clients.get(ws.id);
+  const currentTerminalId = terminalId || 'default';
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  
+  if (!terminalState || !terminalState.ptyProcess || !terminalState.isReady) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: '終端未就緒，請稍後再試',
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
+    return;
+  }
+  
+  const processId = Math.random().toString(36).substr(2, 9);
+  
+  // 記錄命令歷史
+  terminalState.commandHistory.push({
+    command: command,
+    timestamp: new Date(),
+    processId: processId
+  });
+  
+  ws.send(JSON.stringify({
+    type: 'info',
+    message: `執行命令: ${command}`,
+    processId: processId,
+    terminalId: currentTerminalId,
+    timestamp: new Date().toISOString()
+  }));
+  
+  console.log(`在持久終端 ${currentTerminalId} 中執行命令: ${command}`);
+  
+  try {
+    // 將命令發送到持久的 PTY 進程
+    terminalState.ptyProcess.write(`${command}\r`);
     
-    // 根據前端設定決定是否優化命令
-    if (options.optimizeInteractiveCommands !== false) {
-      // 優化命令以便在網頁環境中更好地顯示
-      const optimizedCommand = optimizeCommandForWeb(command);
-      const optimizedMessage = { ...message, command: optimizedCommand };
-      
-      // 如果命令被優化為不需要 PTY 的版本，使用常規執行
-      if (!needsTTY(optimizedCommand)) {
-        executeRegularCommand(ws, optimizedMessage, processId, currentWorkingDir);
-        return;
+    // 記錄進程信息（用於追蹤和管理）
+    processes.set(processId, {
+      process: terminalState.ptyProcess,
+      clientId: ws.id,
+      terminalId: currentTerminalId,
+      command: command,
+      startTime: new Date(),
+      isPersistent: true,
+      isPTY: true
+    });
+    
+    // 設置超時清理（可選，防止進程記錄累積太多）
+    setTimeout(() => {
+      if (processes.has(processId)) {
+        processes.delete(processId);
       }
-    }
+    }, 30000); // 30秒後自動清理記錄
     
-    executeCommandWithPTY(ws, message);
-    return;
+  } catch (error) {
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: `執行命令失敗: ${error.message}`,
+      processId: processId,
+      terminalId: currentTerminalId,
+      timestamp: new Date().toISOString()
+    }));
   }
-  
-  executeRegularCommand(ws, message, processId, currentWorkingDir);
 }
 
 // 執行常規命令（不需要 PTY）
