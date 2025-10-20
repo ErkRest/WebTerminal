@@ -129,6 +129,14 @@ function handleCommand(ws, message) {
       resizeTerminal(ws, message);
       break;
       
+    case 'special_key':
+      handleSpecialKey(ws, message);
+      break;
+      
+    case 'send_input':
+      sendInputToTerminal(ws, message);
+      break;
+      
     default:
       ws.send(JSON.stringify({
         type: 'error',
@@ -140,7 +148,7 @@ function handleCommand(ws, message) {
 
 // 創建持久化終端
 function createPersistentTerminal(ws, message) {
-  const { terminalId } = message;
+  const { terminalId, cols, rows } = message;
   const clientState = clients.get(ws.id);
   
   if (!clientState) {
@@ -172,11 +180,15 @@ function createPersistentTerminal(ws, message) {
   console.log(`創建持久化終端: ${currentTerminalId}, 工作目錄: ${defaultWorkingDir}`);
   
   try {
+    // 使用客戶端傳遞的大小，或使用默認值
+    const terminalCols = cols || 140;
+    const terminalRows = rows || 30;
+    
     // 創建持久的 PTY 進程
     const ptyProcess = pty.spawn(isWindows ? 'cmd.exe' : '/bin/bash', [], {
       name: 'xterm-color',
-      cols: 140,  // 增加列數以顯示更多內容
-      rows: 30,   // 也增加行數
+      cols: terminalCols,
+      rows: terminalRows,
       cwd: defaultWorkingDir,
       env: {
         ...process.env,
@@ -337,6 +349,123 @@ function resizeTerminal(ws, message) {
   }
 }
 
+// 處理特殊按鍵
+function handleSpecialKey(ws, message) {
+  const { key, ctrlKey, shiftKey, altKey, terminalId } = message;
+  const clientState = clients.get(ws.id);
+  
+  if (!clientState) return;
+  
+  const currentTerminalId = terminalId || 'default';
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  
+  if (!terminalState || !terminalState.ptyProcess) {
+    return;
+  }
+  
+  // 將特殊按鍵轉換為 ANSI 轉義序列
+  let ansiSequence = '';
+  
+  switch (key) {
+    case 'ArrowUp':
+      ansiSequence = ctrlKey ? '\x1b[1;5A' : shiftKey ? '\x1b[1;2A' : '\x1b[A';
+      break;
+    case 'ArrowDown':
+      ansiSequence = ctrlKey ? '\x1b[1;5B' : shiftKey ? '\x1b[1;2B' : '\x1b[B';
+      break;
+    case 'ArrowRight':
+      ansiSequence = ctrlKey ? '\x1b[1;5C' : shiftKey ? '\x1b[1;2C' : '\x1b[C';
+      break;
+    case 'ArrowLeft':
+      ansiSequence = ctrlKey ? '\x1b[1;5D' : shiftKey ? '\x1b[1;2D' : '\x1b[D';
+      break;
+    case 'Home':
+      ansiSequence = ctrlKey ? '\x1b[1;5H' : '\x1b[H';
+      break;
+    case 'End':
+      ansiSequence = ctrlKey ? '\x1b[1;5F' : '\x1b[F';
+      break;
+    case 'PageUp':
+      ansiSequence = '\x1b[5~';
+      break;
+    case 'PageDown':
+      ansiSequence = '\x1b[6~';
+      break;
+    case 'Insert':
+      ansiSequence = '\x1b[2~';
+      break;
+    case 'Delete':
+      ansiSequence = '\x1b[3~';
+      break;
+    case 'F1':
+      ansiSequence = '\x1bOP';
+      break;
+    case 'F2':
+      ansiSequence = '\x1bOQ';
+      break;
+    case 'F3':
+      ansiSequence = '\x1bOR';
+      break;
+    case 'F4':
+      ansiSequence = '\x1bOS';
+      break;
+    case 'F5':
+      ansiSequence = '\x1b[15~';
+      break;
+    case 'F6':
+      ansiSequence = '\x1b[17~';
+      break;
+    case 'F7':
+      ansiSequence = '\x1b[18~';
+      break;
+    case 'F8':
+      ansiSequence = '\x1b[19~';
+      break;
+    case 'F9':
+      ansiSequence = '\x1b[20~';
+      break;
+    case 'F10':
+      ansiSequence = '\x1b[21~';
+      break;
+    case 'F11':
+      ansiSequence = '\x1b[23~';
+      break;
+    case 'F12':
+      ansiSequence = '\x1b[24~';
+      break;
+  }
+  
+  if (ansiSequence) {
+    try {
+      terminalState.ptyProcess.write(ansiSequence);
+    } catch (error) {
+      console.error('發送特殊按鍵失敗:', error);
+    }
+  }
+}
+
+// 發送輸入到終端
+function sendInputToTerminal(ws, message) {
+  const { input, terminalId } = message;
+  const clientState = clients.get(ws.id);
+  
+  if (!clientState) return;
+  
+  const currentTerminalId = terminalId || 'default';
+  const terminalState = clientState.terminals.get(currentTerminalId);
+  
+  if (!terminalState || !terminalState.ptyProcess) {
+    return;
+  }
+  
+  try {
+    // 直接將輸入發送到 PTY
+    terminalState.ptyProcess.write(input);
+  } catch (error) {
+    console.error('發送輸入到終端失敗:', error);
+  }
+}
+
 // 檢測是否需要 TTY 的命令
 function needsTTY(command) {
   const parts = command.trim().split(' ');
@@ -393,7 +522,7 @@ function optimizeCommandForWeb(command) {
 
 // 使用 PTY 執行需要 TTY 的命令
 function executeCommandWithPTY(ws, message) {
-  const { command, terminalId, options = {} } = message;
+  const { command, terminalId, cols, rows, options = {} } = message;
   const processId = Math.random().toString(36).substr(2, 9);
   const clientState = clients.get(ws.id);
   const currentTerminalId = terminalId || 'default';
@@ -411,12 +540,13 @@ function executeCommandWithPTY(ws, message) {
   // 檢查是否需要清理 ANSI 序列（根據前端設定決定）
   const shouldStripAnsi = options.optimizeInteractiveCommands !== false; // 如果優化交互式命令，則清理 ANSI
   
-  ws.send(JSON.stringify({
-    type: 'info',
-    message: `執行命令 (PTY): ${command}`,
-    processId: processId,
-    timestamp: new Date().toISOString()
-  }));
+  // 不再發送 "執行命令 (PTY):" 系統消息，讓終端輸出更乾淨
+  // ws.send(JSON.stringify({
+  //   type: 'info',
+  //   message: `執行命令 (PTY): ${command}`,
+  //   processId: processId,
+  //   timestamp: new Date().toISOString()
+  // }));
   
   console.log(`使用 PTY 執行命令: ${command}, 工作目錄: ${currentWorkingDir}`);
   
@@ -428,19 +558,23 @@ function executeCommandWithPTY(ws, message) {
     const cmdName = command.trim().split(' ')[0];
     if (cmdName === 'top') {
       env.TERM = 'dumb'; // 使用簡單終端模式
-      env.COLUMNS = '140';
-      env.LINES = '24';
+      env.COLUMNS = String(terminalCols);
+      env.LINES = String(terminalRows);
     } else if (['less', 'more', 'man'].includes(cmdName)) {
       env.PAGER = 'cat'; // 禁用分頁
       env.MANPAGER = 'cat';
     }
     
+    // 使用客戶端傳遞的大小或默認值
+    const terminalCols = cols || 140;
+    const terminalRows = rows || 30;
+    
     // 使用 node-pty 創建偽終端
     const ptyProcess = pty.spawn(isWindows ? 'cmd.exe' : 'bash', 
       isWindows ? ['/c', command] : ['-c', command], {
       name: 'xterm-color',
-      cols: 140,  // 增加列數以顯示更多內容
-      rows: 30,   // 也增加行數
+      cols: terminalCols,
+      rows: terminalRows,
       cwd: currentWorkingDir,
       env: env
     });
@@ -570,13 +704,14 @@ function executeCommandInPersistentTerminal(ws, message) {
     processId: processId
   });
   
-  ws.send(JSON.stringify({
-    type: 'info',
-    message: `執行命令: ${command}`,
-    processId: processId,
-    terminalId: currentTerminalId,
-    timestamp: new Date().toISOString()
-  }));
+  // 不再發送 "執行命令:" 系統消息，讓終端輸出更乾淨
+  // ws.send(JSON.stringify({
+  //   type: 'info',
+  //   message: `執行命令: ${command}`,
+  //   processId: processId,
+  //   terminalId: currentTerminalId,
+  //   timestamp: new Date().toISOString()
+  // }));
   
   console.log(`在持久終端 ${currentTerminalId} 中執行命令: ${command}`);
   
@@ -619,12 +754,13 @@ function executeRegularCommand(ws, message, processId, currentWorkingDir) {
   const currentTerminalId = terminalId || 'default';
   const isWindows = process.platform === 'win32';
   
-  ws.send(JSON.stringify({
-    type: 'info',
-    message: `執行命令: ${command}`,
-    processId: processId,
-    timestamp: new Date().toISOString()
-  }));
+  // 不再發送 "執行命令:" 系統消息，讓終端輸出更乾淨
+  // ws.send(JSON.stringify({
+  //   type: 'info',
+  //   message: `執行命令: ${command}`,
+  //   processId: processId,
+  //   timestamp: new Date().toISOString()
+  // }));
   
   // 調試信息
   console.log(`執行命令: ${command}, 工作目錄: ${currentWorkingDir}`);

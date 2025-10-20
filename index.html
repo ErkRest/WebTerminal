@@ -223,29 +223,44 @@
             overflow-y: auto; /* 允許垂直滾動 */
             min-width: 0; /* 允許縮小到任意寬度 */
             width: 100%; /* 確保占滿容器寬度 */
-            /* 游標相關樣式 */
-            caret-color: #00ff00; /* 明亮的綠色游標 */
+            /* 隱藏原生光標 */
+            caret-color: transparent;
             scroll-behavior: smooth;
+            position: relative;
         }
 
         .terminal-textarea:focus {
             outline: none;
-            /* 在 focus 時讓游標更明顯 */
-            caret-color: #00ff41; /* 更亮的綠色 */
         }
 
         .terminal-textarea::selection {
             background-color: #264f78;
         }
 
-        /* 自定義游標動畫效果 */
-        @keyframes blink-caret {
-            from, to { caret-color: #00ff41; }
-            50% { caret-color: transparent; }
+        /* 自定義方塊光標 */
+        .terminal-container {
+            position: relative;
         }
 
-        .terminal-textarea:focus {
-            animation: blink-caret 1s step-end infinite;
+        .custom-cursor {
+            position: absolute;
+            width: 8px;
+            height: 16px;
+            background-color: rgba(255, 255, 255, 0.8);
+            pointer-events: none;
+            z-index: 10;
+            animation: blink-cursor 1.2s ease-in-out infinite;
+            border-radius: 1px;
+        }
+
+        @keyframes blink-cursor {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        /* 當 textarea 失去焦點時隱藏光標 */
+        .terminal-textarea:not(:focus) + .custom-cursor {
+            display: none;
         }
 
         /* 確保 textarea 始終滾動到底部 */

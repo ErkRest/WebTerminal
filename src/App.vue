@@ -60,7 +60,7 @@
         </div>
 
         <!-- 整合終端顯示區域 -->
-        <div class="integrated-terminal" ref="terminalContainer" :style="{ fontSize: settings.fontSize + 'px' }">
+        <div class="integrated-terminal terminal-container" ref="terminalContainer" :style="{ fontSize: settings.fontSize + 'px' }">
           <textarea
             ref="terminalTextarea"
             v-model="terminalDisplay"
@@ -69,6 +69,7 @@
             @mousedown="handleMouseDown"
             @mouseup="handleMouseUp"
             @select="handleTextSelect"
+            @input="updateCursorPosition"
             :disabled="!isConnected"
             class="terminal-textarea"
             spellcheck="false"
@@ -76,6 +77,11 @@
             autocorrect="off"
             autocapitalize="off"
           ></textarea>
+          <div 
+            ref="customCursor" 
+            class="custom-cursor"
+            :style="cursorStyle"
+          ></div>
         </div>
       </div>
 
@@ -168,6 +174,18 @@
                 />
                 <span class="setting-text">自動滾動</span>
                 <span class="setting-description">新輸出時自動滾動到底部</span>
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input 
+                  type="checkbox" 
+                  v-model="settings.fullTerminalMode"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">全終端模式</span>
+                <span class="setting-description">支援 vim、tmux 等全屏應用程序</span>
               </label>
             </div>
           </div>
@@ -280,6 +298,11 @@ export default {
     const isConnected = ref(false)
     const connectionStatus = ref('未連接')
     const showSettings = ref(false) // 控制設定面板顯示
+    
+    // 自定義光標相關
+    const customCursor = ref(null)
+    const cursorPosition = ref({ x: 0, y: 0 })
+    const cursorStyle = ref({ left: '0px', top: '0px' })
     const pausedProcess = ref(null) // 當前暫停的進程信息
     const customResponse = ref('') // 自定義回應內容
     const systemInfo = ref(null) // 系統信息
@@ -292,7 +315,9 @@ export default {
       fontSize: 14,                // 字體大小
       maxOutputLines: 1000,        // 最大輸出行數
       maxHistorySize: 50,          // 命令歷史記錄數量
-      optimizeInteractiveCommands: true  // 優化交互式命令（如 top, htop）
+      optimizeInteractiveCommands: true, // 優化交互式命令（如 top, htop）
+      fullTerminalMode: true,      // 全終端模式（支援 vim, tmux 等）
+      debugMode: true              // 調試模式
     })
     
     // 終端顯示內容
@@ -359,8 +384,15 @@ export default {
         
         content += lineContent
         
-        // 如果不是最後一行，或者最後一行不像提示符，則添加換行
-        if (!isLastLine || !looksLikePrompt) {
+        // 更精確的換行控制
+        if (!isLastLine) {
+          // 不是最後一行，添加換行
+          content += '\n'
+        } else if (looksLikePrompt) {
+          // 最後一行是提示符，不添加換行（游標會緊接在提示符後）
+          // 不添加換行
+        } else {
+          // 最後一行不是提示符，添加換行
           content += '\n'
         }
       }
@@ -401,6 +433,97 @@ export default {
       // 確保 textarea 獲得焦點以顯示游標
       if (document.activeElement !== textarea) {
         textarea.focus()
+      }
+      
+      // 更新自定義光標位置
+      updateCursorPosition()
+    }
+    
+    // 計算並更新自定義光標位置
+    const updateCursorPosition = () => {
+      if (!terminalTextarea.value || !customCursor.value) return
+      
+      const textarea = terminalTextarea.value
+      const content = textarea.value
+      const cursorPos = textarea.selectionStart
+      const hasSelection = textarea.selectionStart !== textarea.selectionEnd
+      
+      // 如果用戶正在選取文字，隱藏自定義光標
+      if (hasSelection) {
+        cursorStyle.value = { ...cursorStyle.value, display: 'none' }
+        return
+      } else {
+        cursorStyle.value = { ...cursorStyle.value, display: 'block' }
+      }
+      
+      // 計算可編輯區域的開始位置
+      const lines = content.split('\n')
+      const lastLineIndex = lines.length - 1
+      const lastLine = lines[lastLineIndex] || ''
+      const promptMatch = lastLine.match(/.*[$#%>]\s*/)
+      const editableStartPos = promptMatch ? 
+        content.lastIndexOf(lastLine) + promptMatch[0].length : 
+        content.length
+      
+      // 限制光標只能在可編輯區域
+      if (cursorPos < editableStartPos) {
+        textarea.setSelectionRange(editableStartPos, editableStartPos)
+        return
+      }
+      
+      // 計算光標的視覺位置
+      const styles = window.getComputedStyle(textarea)
+      const fontSize = parseFloat(styles.fontSize)
+      const lineHeight = parseFloat(styles.lineHeight) || fontSize * 1.4
+      const charWidth = fontSize * 0.6 // 等寬字體的字符寬度約為字體大小的 0.6 倍
+      const padding = parseFloat(styles.paddingLeft) || 15
+      
+      // 計算當前行的位置
+      const textBeforeCursor = content.substring(0, cursorPos)
+      const linesBeforeCursor = textBeforeCursor.split('\n')
+      const currentLineIndex = linesBeforeCursor.length - 1
+      const currentLineText = linesBeforeCursor[currentLineIndex] || ''
+      
+      // 計算 x, y 位置
+      const x = padding + (currentLineText.length * charWidth)
+      const y = padding + (currentLineIndex * lineHeight) + 2 // 稍微向下偏移
+      
+      // 更新光標樣式，使其大小更合適
+      cursorStyle.value = {
+        left: `${x}px`,
+        top: `${y}px`,
+        width: `${Math.max(charWidth * 0.8, 6)}px`, // 動態寬度，但至少6px
+        height: `${Math.max(lineHeight * 0.85, 14)}px` // 稍微小於行高
+      }
+    }
+    
+    // 限制光標在輸入行
+    const restrictCursorToInputLine = () => {
+      if (!terminalTextarea.value) return
+      
+      const textarea = terminalTextarea.value
+      const content = textarea.value
+      const cursorPos = textarea.selectionStart
+      const hasSelection = textarea.selectionStart !== textarea.selectionEnd
+      
+      // 如果用戶正在選取文字，不要干擾
+      if (hasSelection || isMouseSelecting.value) {
+        return
+      }
+      
+      // 計算可編輯區域的開始位置
+      const lines = content.split('\n')
+      const lastLineIndex = lines.length - 1
+      const lastLine = lines[lastLineIndex] || ''
+      const promptMatch = lastLine.match(/.*[$#%>]\s*/)
+      const editableStartPos = promptMatch ? 
+        content.lastIndexOf(lastLine) + promptMatch[0].length : 
+        content.length
+      
+      // 只有在輸入操作時才限制光標位置（而不是在選取時）
+      if (cursorPos < editableStartPos) {
+        textarea.setSelectionRange(editableStartPos, editableStartPos)
+        updateCursorPosition()
       }
     }
     
@@ -484,12 +607,12 @@ export default {
       if (event.key === 'Enter') {
         event.preventDefault()
         
-        if (currentCommand.value.trim()) {
+        if (currentCommand.value.length > 0) {
+          // 有任何內容（包括空格）就執行命令
           executeCommand()
         } else {
-          // 空命令，直接添加新行
-          addOutputLine('info', '', currentTerminal.value.id)
-          updateTerminalDisplay()
+          // 完全空的命令（只按 Enter）
+          executeEmptyCommand()
         }
         
       } else if (event.key === 'ArrowUp') {
@@ -602,22 +725,49 @@ export default {
         // Home 鍵：移動到可編輯區域的開始
         event.preventDefault()
         textarea.setSelectionRange(editableStartPos, editableStartPos)
+        updateCursorPosition()
         
       } else if (event.key === 'End') {
         // End 鍵：移動到行尾
         event.preventDefault()
         textarea.setSelectionRange(content.length, content.length)
+        updateCursorPosition()
         
       } else if (event.ctrlKey && event.key === 'Home') {
         // Ctrl+Home：移動到可編輯區域的開始
         event.preventDefault()
         textarea.setSelectionRange(editableStartPos, editableStartPos)
+        updateCursorPosition()
         
       } else if (event.ctrlKey && event.key === 'End') {
         // Ctrl+End：移動到文檔末尾
         event.preventDefault()
         textarea.setSelectionRange(content.length, content.length)
+        updateCursorPosition()
         
+      }
+      
+      // 全終端模式：支援特殊按鍵的直接傳遞
+      if (settings.fullTerminalMode && isConnected.value && ws) {
+        const specialKeys = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+                           'Insert', 'Delete', 'PageUp', 'PageDown']
+        
+        if (specialKeys.includes(event.key) || 
+           (event.key.startsWith('Arrow') && (event.ctrlKey || event.shiftKey))) {
+          event.preventDefault()
+          event.stopPropagation()
+          
+          // 將特殊按鍵發送到服務器
+          ws.send(JSON.stringify({
+            type: 'special_key',
+            key: event.key,
+            ctrlKey: event.ctrlKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            terminalId: currentTerminal.value?.id
+          }))
+          return
+        }
       }
     }
     
@@ -680,6 +830,9 @@ export default {
         if (textarea.selectionStart < editableStartPos) {
           textarea.setSelectionRange(editableStartPos, editableStartPos)
         }
+        
+        // 更新自定義光標位置
+        updateCursorPosition()
       })
     }
     
@@ -754,10 +907,15 @@ export default {
       
       // 如果已連接，為新終端創建持久化連線
       if (isConnected.value && ws) {
+        // 計算終端大小
+        const size = calculateTerminalSize()
+        
         // 請求服務器創建持久化終端
         ws.send(JSON.stringify({
           type: 'create_terminal',
-          terminalId: newTerminal.id
+          terminalId: newTerminal.id,
+          cols: size.cols,
+          rows: size.rows
         }))
       }
       
@@ -954,6 +1112,11 @@ export default {
       
       if (!terminal) return
       
+      // 調試模式：記錄所有輸出
+      if (settings.debugMode) {
+        console.log(`[DEBUG] 添加輸出行: type=${type}, message="${message}", 長度=${message?.length}`)
+      }
+      
       // 檢查是否為重複的命令回顯
       if (type === 'stdout' && message.trim()) {
         const recentLines = terminal.outputLines.slice(-3) // 檢查最近3行
@@ -982,8 +1145,12 @@ export default {
         }
         
         lines.forEach((line, index) => {
-          // 跳過空行，除非它是唯一的行
-          if (line.trim() === '' && lines.length > 1) return
+          // 更嚴格地過濾空行
+          if (line.trim() === '') {
+            // 只有當它是第一行或最後一行時才可能保留
+            // 並且只有在特殊情況下才保留（比如只有一行）
+            if (lines.length > 1) return
+          }
           
           terminal.outputLines.push({
             type,
@@ -994,12 +1161,27 @@ export default {
         })
       } else {
         // 單行輸出的正常處理
-        terminal.outputLines.push({
-          type,
-          message,
-          processId,
-          timestamp: new Date()
-        })
+        // 過濾掉完全空的消息（但保留有意義的空行，如提示符後的空行）
+        if (message !== '' || type === 'info') {
+          terminal.outputLines.push({
+            type,
+            message,
+            processId,
+            timestamp: new Date()
+          })
+        }
+      }
+      
+      // 過濾連續的空行（保留最多一個空行）
+      if (terminal.outputLines.length >= 2) {
+        const lastLine = terminal.outputLines[terminal.outputLines.length - 1]
+        const secondLastLine = terminal.outputLines[terminal.outputLines.length - 2]
+        
+        // 如果最後兩行都是空行，移除最後一行
+        if (lastLine.message.trim() === '' && secondLastLine.message.trim() === '' &&
+            lastLine.type === secondLastLine.type) {
+          terminal.outputLines.pop()
+        }
       }
       
       // 限制輸出行數，避免記憶體過度使用
@@ -1084,7 +1266,9 @@ export default {
         fontSize: 14,
         maxOutputLines: 1000,
         maxHistorySize: 50,
-        optimizeInteractiveCommands: true
+        optimizeInteractiveCommands: true,
+        fullTerminalMode: true,
+        debugMode: false
       })
     }
     
@@ -1123,9 +1307,10 @@ export default {
       const terminal = currentTerminal.value
       if (!terminal) return
       
-      const command = currentCommand.value.trim()
+      // 不使用 trim()，保留空格
+      const command = currentCommand.value
       
-      if (!command || !isConnected.value) return
+      if (!isConnected.value) return
       
       // 檢查終端是否就緒
       if (!terminal.isReady) {
@@ -1133,20 +1318,26 @@ export default {
         return
       }
       
-      // 添加到當前終端的命令歷史
-      if (terminal.commandHistory[terminal.commandHistory.length - 1] !== command) {
-        terminal.commandHistory.push(command)
+      // 添加到當前終端的命令歷史（只有非空命令才加入歷史）
+      const trimmedCommand = command.trim()
+      if (trimmedCommand && terminal.commandHistory[terminal.commandHistory.length - 1] !== trimmedCommand) {
+        terminal.commandHistory.push(trimmedCommand)
         if (terminal.commandHistory.length > settings.maxHistorySize) {
           terminal.commandHistory.shift()
         }
       }
       commandHistoryIndex.value = -1
       
+      // 計算當前終端大小
+      const size = calculateTerminalSize()
+      
       // 發送命令到服務器
       ws.send(JSON.stringify({
         type: 'execute',
         command: command,
         terminalId: terminal.id,
+        cols: size.cols,
+        rows: size.rows,
         options: {
           optimizeInteractiveCommands: settings.optimizeInteractiveCommands
         }
@@ -1162,6 +1353,35 @@ export default {
       })
     }
     
+    // 執行空命令（只是發送 Enter）
+    const executeEmptyCommand = () => {
+      const terminal = currentTerminal.value
+      if (!terminal || !isConnected.value) return
+      
+      // 檢查終端是否就緒
+      if (!terminal.isReady) {
+        addOutputLine('error', '⚠️ 終端未就緒，請稍候再試', terminal.id)
+        return
+      }
+      
+      // 直接向 PTY 發送換行符
+      if (ws) {
+        ws.send(JSON.stringify({
+          type: 'send_input',
+          input: '\n',
+          terminalId: terminal.id
+        }))
+      }
+      
+      // 清空當前命令
+      currentCommand.value = ''
+      
+      // 更新顯示並確保游標在底部
+      updateTerminalDisplay()
+      nextTick(() => {
+        ensureCursorAtBottom()
+      })
+    }
 
     
     // 清除當前終端輸出
@@ -1462,7 +1682,21 @@ export default {
       nextTick(() => {
         setTimeout(() => {
           resizeTerminal()
+          updateCursorPosition() // 初始化光標位置
         }, 1000) // 等待 WebSocket 連接穩定
+      })
+      
+      // 添加光標相關事件監聽器
+      nextTick(() => {
+        if (terminalTextarea.value) {
+          const textarea = terminalTextarea.value
+          // 監聽光標位置變化
+          textarea.addEventListener('keyup', updateCursorPosition)
+          textarea.addEventListener('click', updateCursorPosition)
+          textarea.addEventListener('focus', updateCursorPosition)
+          // 移除 input 事件監聽器，因為它會干擾文字選取
+          // textarea.addEventListener('input', restrictCursorToInputLine)
+        }
       })
     })
     
@@ -1500,8 +1734,14 @@ export default {
       terminalTextarea,
       terminalContainer,
       
+      // 自定義光標
+      customCursor,
+      cursorPosition,
+      cursorStyle,
+      
       // 方法
       executeCommand,
+      executeEmptyCommand,
       clearOutput,
       handleTerminalKeydown,
       handleTerminalClick,
@@ -1510,6 +1750,8 @@ export default {
       handleTextSelect,
       focusToEnd,
       ensureCursorAtBottom,
+      updateCursorPosition,
+      restrictCursorToInputLine,
       updateTerminalDisplay,
       formatTime,
       getPromptText,
