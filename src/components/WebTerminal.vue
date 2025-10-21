@@ -21,12 +21,16 @@ export default {
     isConnected: {
       type: Boolean,
       default: false
+    },
+    activeTabId: {
+      type: String,
+      default: null
     }
   },
   emits: ['resize'],
   setup(props, { emit }) {
     const terminalElement = ref(null)
-    let terminal = null
+    let terminal = null // 暫時保持單一終端實例
     let fitAddon = null
     let resizeObserver = null
 
@@ -136,7 +140,7 @@ export default {
     }
 
     // 清空終端
-    const clearTerminal = () => {
+    const clearTerminal = (terminalId = null) => {
       if (terminal) {
         terminal.clear()
       }
@@ -217,12 +221,19 @@ export default {
       }
     })
 
+    // 切換終端（暫時簡化實現）
+    const switchTerminal = (terminalId) => {
+      console.log('切換到終端:', terminalId)
+      // 暫時只是記錄，實際的多終端功能需要更複雜的實現
+    }
+
     // 暴露方法給父組件
     return {
       terminalElement,
       clearTerminal,
       getTerminalSize,
-      writeToTerminal
+      writeToTerminal,
+      switchTerminal
     }
   }
 }
@@ -234,11 +245,9 @@ export default {
   flex: 1;
   display: flex;
   flex-direction: column;
-  border: 1px solid #333;
-  border-radius: 4px;
-  overflow: hidden;
   background-color: #1e1e1e;
-  min-height: 400px; /* 最小高度 */
+  overflow: hidden;
+  /* 移除邊框和圓角，讓終端看起來更乾淨 */
 }
 
 .terminal {
