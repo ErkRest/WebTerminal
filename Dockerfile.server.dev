@@ -1,0 +1,27 @@
+# 後端服務器開發 Dockerfile
+FROM node:18
+
+# 安裝 Python 和構建工具，用於編譯原生模組
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# 設置工作目錄
+WORKDIR /app
+
+# 複製 package 文件
+COPY package.server.json package.json
+
+# 安裝依賴
+RUN npm install
+
+# 複製服務器源代碼
+COPY server.js ./
+
+# 暴露端口
+EXPOSE 3000
+
+# 啟動開發服務器
+CMD ["npm", "run", "start"]

@@ -1,0 +1,44 @@
+# 後端服務器 Dockerfile
+FROM node:18-alpine
+
+# 設置工作目錄
+WORKDIR /app
+
+# 安裝系統依賴 (node-pty 需要的編譯工具)
+RUN apk add --no-cache \
+    make \
+    g++ \
+    python3 \
+    python3-dev \
+    linux-headers \
+    pkgconfig
+
+# 設置 Python 環境變數
+ENV PYTHON=/usr/bin/python3
+
+# 複製後端專用的 package 文件
+COPY package.server.json package.json
+
+# 安裝依賴 (使用 npm install 而不是 npm ci 因為沒有對應的 lock 文件)
+RUN npm install
+
+# 複製服務器代碼
+COPY server.js ./
+
+# 創建非 root 用戶
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nodejs -u 1001
+
+# 更改目錄所有權
+RUN chown -R nodejs:nodejs /app
+USER nodejs
+
+# 暴露端口
+EXPOSE 3000
+
+# 健康檢查
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1
+
+# 啟動命令
+CMD ["node", "server.js"]

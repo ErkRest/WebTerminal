@@ -1,0 +1,88 @@
+services:
+  # 後端服務器 (開發模式)
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server.dev
+    container_name: webterminal-server-dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - FRONTEND_URL=http://localhost:5173
+    volumes:
+      # 掛載服務器源代碼
+      - ./server.js:/app/server.js:ro
+      # 映射主機的 /tmp 目錄以提供更好的終端體驗
+      - /tmp:/tmp:rw
+    networks:
+      - webterminal-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on: []
+    # 臨時移除安全限制以允許安裝包
+    # security_opt:
+    #   - no-new-privileges:true
+    # cap_drop:
+    #   - ALL
+    # cap_add:
+    #   - SETUID
+    #   - SETGID
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.webterminal-server.rule=Host(`api.localhost`)"
+      - "traefik.http.services.webterminal-server.loadbalancer.server.port=3000"
+
+  # 前端客戶端 (開發模式)
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client.dev
+    container_name: webterminal-client-dev
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=development
+    volumes:
+      # 掛載前端源代碼
+      - ./src:/app/src:ro
+      - ./index.html:/app/index.html:ro
+      - ./vite.config.js:/app/vite.config.js:ro
+    networks:
+      - webterminal-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5173"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      - server
+    # 臨時移除安全限制以允許安裝包
+    # security_opt:
+    #   - no-new-privileges:true
+    # cap_drop:
+    #   - ALL
+    # cap_add:
+    #   - CHOWN
+    #   - SETUID
+    #   - SETGID
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.webterminal-client.rule=Host(`localhost`)"
+      - "traefik.http.services.webterminal-client.loadbalancer.server.port=5173"
+
+networks:
+  webterminal-network:
+    driver: bridge
+    name: webterminal-network
+
+# 開發模式數據持久化
+volumes: {}

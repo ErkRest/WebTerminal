@@ -8,21 +8,31 @@
     "server": "node server.js",
     "client": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "docker:restart": "docker-compose restart",
+    "docker:clean": "docker-compose down -v --rmi all",
+    "docker:dev": "docker-compose up --build"
   },
   "dependencies": {
-    "child_process": "^1.0.2",
-    "iconv-lite": "^0.7.0",
-    "koa": "^2.14.2",
-    "koa-static": "^5.0.0",
     "node-pty": "^1.0.0",
-    "strip-ansi": "^7.1.2",
-    "ws": "^8.14.2"
+    "ws": "^8.14.2",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^4.4.0",
     "concurrently": "^8.2.2",
     "vite": "^4.4.9",
-    "vue": "^3.3.4"
+    "vue": "^3.3.4",
+    "@xterm/xterm": "^5.3.0",
+    "@xterm/addon-attach": "^0.11.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-web-links": "^0.11.0",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5"
   }
 }
