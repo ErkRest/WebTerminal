@@ -202,7 +202,6 @@ export default {
       // 終端創建成功
       socket.value.on('terminal-created', (data) => {
         console.log('終端創建成功:', data)
-        Object.assign(terminalInfo, data)
         
         // 更新對應分頁的信息
         if (data.terminalId) {
@@ -210,10 +209,10 @@ export default {
           if (tab) {
             tab.pid = data.pid
           }
+          
+          // 獲取終端詳細信息
+          socket.value.emit('get-terminal-info', { terminalId: data.terminalId })
         }
-        
-        // 獲取終端詳細信息
-        socket.value.emit('get-terminal-info', { terminalId: data.terminalId })
       })
 
       // 終端信息
@@ -230,8 +229,18 @@ export default {
 
       // 終端退出
       socket.value.on('terminal-exit', (data) => {
-        console.log('終端退出，代碼:', data.exitCode)
-        terminalInfo.pid = null
+        console.log('終端退出:', data)
+        
+        if (data.terminalId) {
+          // 更新對應分頁的信息
+          const tab = tabs.value.find(tab => tab.id === data.terminalId)
+          if (tab) {
+            tab.pid = null
+          }
+          
+          // 可選：自動關閉已退出的分頁
+          // closeTab(data.terminalId)
+        }
       })
 
       // 服務器統計信息
@@ -299,12 +308,12 @@ export default {
     }
 
     // 處理終端尺寸變更
-    const handleTerminalResize = ({ cols, rows }) => {
-      if (socket.value && isConnected.value && activeTabId.value) {
+    const handleTerminalResize = ({ cols, rows, terminalId }) => {
+      if (socket.value && isConnected.value && terminalId) {
         socket.value.emit('terminal-resize', { 
           cols, 
           rows,
-          terminalId: activeTabId.value 
+          terminalId 
         })
       }
     }
@@ -329,7 +338,10 @@ export default {
       
       // 創建終端會話
       const terminalSize = terminalRef.value?.getTerminalSize() || { cols: 80, rows: 24 }
-      socket.value.emit('create-terminal', { ...terminalSize, terminalId: tabId })
+      socket.value.emit('create-terminal', { 
+        ...terminalSize, 
+        terminalId: tabId 
+      })
     }
 
     // 切換到指定分頁
@@ -338,12 +350,11 @@ export default {
       tabs.value.forEach(tab => {
         tab.isActive = tab.id === tabId
       })
+      
+      const oldActiveTabId = activeTabId.value
       activeTabId.value = tabId
       
-      // 通知終端組件切換
-      if (terminalRef.value) {
-        terminalRef.value.switchTerminal(tabId)
-      }
+      console.log(`切換分頁: ${oldActiveTabId} -> ${tabId}`)
     }
 
     // 關閉分頁
@@ -351,20 +362,29 @@ export default {
       const tabIndex = tabs.value.findIndex(tab => tab.id === tabId)
       if (tabIndex === -1) return
 
-      // 如果關閉的是當前活動分頁，需要切換到其他分頁
-      if (tabId === activeTabId.value) {
-        if (tabs.value.length > 1) {
-          // 切換到前一個或後一個分頁
-          const newActiveIndex = tabIndex > 0 ? tabIndex - 1 : 1
-          switchToTab(tabs.value[newActiveIndex].id)
-        } else {
-          activeTabId.value = null
-        }
-      }
+      console.log(`關閉分頁: ${tabId}`)
 
       // 通知服務器關閉終端
       if (socket.value) {
         socket.value.emit('close-terminal', { terminalId: tabId })
+      }
+
+      // 通知終端組件銷毀終端
+      if (terminalRef.value) {
+        terminalRef.value.destroyTerminal(tabId)
+      }
+
+      // 如果關閉的是當前活動分頁，需要切換到其他分頁
+      if (tabId === activeTabId.value) {
+        if (tabs.value.length > 1) {
+          // 切換到前一個或後一個分頁
+          const newActiveIndex = tabIndex > 0 ? tabIndex - 1 : tabIndex + 1
+          if (newActiveIndex < tabs.value.length) {
+            switchToTab(tabs.value[newActiveIndex].id)
+          }
+        } else {
+          activeTabId.value = null
+        }
       }
 
       // 移除分頁
