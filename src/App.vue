@@ -152,7 +152,8 @@ export default {
 
       connectionStatus.value = 'connecting'
       
-      socket.value = io('http://localhost:3000', {
+      // 使用相對路徑，通過 Vite 代理連接到服務器
+      socket.value = io('/', {
         transports: ['websocket', 'polling']
       })
 
@@ -303,3 +304,58 @@ export default {
   }
 }
 </script>
+
+<style scoped>
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.terminal-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* 允許 flex 項目縮小 */
+}
+
+.server-stats {
+  margin-top: 20px;
+  padding: 16px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.server-stats h3 {
+  margin-bottom: 12px;
+  color: #333;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #f8f9fa;
+  border-radius: 4px;
+  border: 1px solid #e9ecef;
+}
+
+.stat-label {
+  font-weight: 500;
+  color: #666;
+}
+
+.stat-value {
+  font-weight: 600;
+  color: #333;
+}
+</style>

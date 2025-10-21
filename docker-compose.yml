@@ -53,6 +53,7 @@ services:
     volumes:
       # 掛載前端源代碼
       - ./src:/app/src:ro
+      - ./public:/app/public:ro
       - ./index.html:/app/index.html:ro
       - ./vite.config.js:/app/vite.config.js:ro
     networks:

@@ -179,10 +179,15 @@ export default {
     watch(() => props.isConnected, (connected) => {
       if (terminal) {
         if (connected) {
-          terminal.setOption('disableStdin', false)
+          terminal.options.disableStdin = false
           terminal.focus()
+          // 當連接成功時，自動創建終端會話
+          if (props.socket) {
+            const terminalSize = getTerminalSize()
+            props.socket.emit('create-terminal', terminalSize)
+          }
         } else {
-          terminal.setOption('disableStdin', true)
+          terminal.options.disableStdin = true
         }
       }
     })
@@ -226,17 +231,21 @@ export default {
 <style scoped>
 .terminal-container {
   width: 100%;
-  height: 600px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   border: 1px solid #333;
   border-radius: 4px;
   overflow: hidden;
   background-color: #1e1e1e;
+  min-height: 400px; /* 最小高度 */
 }
 
 .terminal {
   width: 100%;
-  height: 100%;
+  flex: 1;
   padding: 10px;
+  min-height: 0; /* 允許 flex 項目縮小 */
 }
 
 /* 確保終端獲得焦點時的樣式 */
@@ -246,5 +255,11 @@ export default {
 
 .terminal :deep(.xterm-screen) {
   background-color: transparent;
+}
+
+/* 確保終端內容完全可見 */
+.terminal :deep(.xterm) {
+  height: 100% !important;
+  padding-bottom: 10px; /* 避免最後一行被擋住 */
 }
 </style>

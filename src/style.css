@@ -14,7 +14,6 @@ body {
 
 #app {
   min-height: 100vh;
-  padding: 20px;
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -169,14 +168,7 @@ body {
   background-color: #545b62;
 }
 
-/* 終端容器 */
-.terminal-container {
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  overflow: hidden;
-  margin-bottom: 20px;
-}
+/* 終端容器 - 移除全局樣式，使用組件內部樣式 */
 
 /* 響應式設計 */
 @media (max-width: 768px) {

@@ -8,6 +8,17 @@ export default defineConfig({
     host: '0.0.0.0',
     watch: {
       usePolling: true
+    },
+    proxy: {
+      '/socket.io': {
+        target: 'http://server:3000',
+        changeOrigin: true,
+        ws: true
+      },
+      '/api': {
+        target: 'http://server:3000',
+        changeOrigin: true
+      }
     }
   },
   build: {
