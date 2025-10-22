@@ -1,5 +1,29 @@
 <template>
   <div id="app">
+    <!-- 身份驗證對話框 -->
+    <div v-if="showAuthDialog" class="auth-overlay">
+      <div class="auth-dialog">
+        <h3>身份驗證</h3>
+        <p>請輸入伺服器提供的密鑰以連接到終端服務</p>
+        <div class="auth-input-group">
+          <input 
+            v-model="authKey" 
+            type="text" 
+            placeholder="請輸入密鑰 (格式: XXXX-XXXX-XXXX-XXXX)"
+            class="auth-input"
+            @keyup.enter="authenticate"
+            ref="authInput"
+          />
+          <button @click="authenticate" :disabled="!authKey.trim()" class="auth-btn">
+            驗證
+          </button>
+        </div>
+        <div v-if="authError" class="auth-error">
+          {{ authError }}
+        </div>
+      </div>
+    </div>
+
     <!-- 頂部工具欄 -->
     <div class="top-toolbar">
       <!-- 左側：連接狀態和控制 -->
@@ -353,6 +377,13 @@ export default {
     const connectionStatus = ref('disconnected')
     const terminalRef = ref(null)
     
+    // 身份驗證相關狀態
+    const showAuthDialog = ref(false)
+    const authKey = ref('')
+    const authError = ref('')
+    const isAuthenticated = ref(false)
+    const authInput = ref(null)
+    
     // 終端分頁管理
     const tabs = ref([])
     const activeTabId = ref(null)
@@ -460,12 +491,66 @@ export default {
         console.log('WebSocket 連接成功')
         connectionStatus.value = 'connected'
         isConnected.value = true
-        // 自動獲取服務器統計信息
+        
+        // 顯示身份驗證對話框
+        showAuthDialog.value = true
+        
+        // 聚焦到輸入框
         setTimeout(() => {
+          if (authInput.value) {
+            authInput.value.focus()
+          }
+        }, 100)
+      })
+
+      // 身份驗證成功
+      socket.value.on('auth-success', (data) => {
+        console.log('身份驗證成功:', data.message)
+        isAuthenticated.value = true
+        showAuthDialog.value = false
+        authError.value = ''
+        
+        // 確保認證狀態完全同步後再創建終端
+        setTimeout(() => {
+          // 自動獲取服務器統計信息
           if (socket.value) {
             socket.value.emit('get-server-stats')
           }
-        }, 1000)
+          
+          // 如果設定為自動創建終端，則創建第一個分頁
+          if (tabs.value.length === 0) {
+            createNewTab()
+          }
+        }, 200) // 給足夠的時間讓認證狀態同步
+      })
+
+      // 身份驗證失敗
+      socket.value.on('auth-failed', (data) => {
+        console.error('身份驗證失敗:', data.message)
+        authError.value = data.message
+        isAuthenticated.value = false
+        authKey.value = ''
+        
+        // 重新聚焦到輸入框
+        setTimeout(() => {
+          if (authInput.value) {
+            authInput.value.focus()
+          }
+        }, 100)
+      })
+
+      // 需要身份驗證
+      socket.value.on('auth-required', (data) => {
+        console.warn('需要身份驗證:', data.message)
+        showAuthDialog.value = true
+        isAuthenticated.value = false
+        
+        // 聚焦到輸入框
+        setTimeout(() => {
+          if (authInput.value) {
+            authInput.value.focus()
+          }
+        }, 100)
       })
 
       // 連接錯誤
@@ -491,6 +576,14 @@ export default {
           const tab = tabs.value.find(tab => tab.id === data.terminalId)
           if (tab) {
             tab.pid = data.pid
+            
+            // 如果這是當前應該活動的分頁，確保正確切換
+            if (tab.isActive) {
+              // 通知 WebTerminal 組件切換到這個終端
+              if (terminalRef.value) {
+                terminalRef.value.switchTerminal(data.terminalId)
+              }
+            }
           }
           
           // 獲取終端詳細信息
@@ -550,10 +643,33 @@ export default {
       })
     }
 
+    // 身份驗證方法
+    const authenticate = () => {
+      if (!authKey.value.trim()) return
+      
+      authError.value = ''
+      
+      if (socket.value) {
+        socket.value.emit('authenticate', { key: authKey.value.trim() })
+      }
+    }
+
     // 連接終端
     const connectTerminal = () => {
       if (!socket.value || !isConnected.value) {
         connectToServer()
+        return
+      }
+
+      // 如果沒有驗證，顯示驗證對話框
+      if (!isAuthenticated.value) {
+        showAuthDialog.value = true
+        // 聚焦到輸入框
+        setTimeout(() => {
+          if (authInput.value) {
+            authInput.value.focus()
+          }
+        }, 100)
         return
       }
 
@@ -570,6 +686,10 @@ export default {
         socket.value = null
         isConnected.value = false
         connectionStatus.value = 'disconnected'
+        isAuthenticated.value = false
+        showAuthDialog.value = false
+        authKey.value = ''
+        authError.value = ''
         terminalInfo.pid = null
       }
     }
@@ -738,8 +858,15 @@ export default {
 
     // 創建新的終端分頁
     const createNewTab = () => {
-      if (!socket.value || !isConnected.value) {
-        connectToServer()
+      if (!socket.value || !isConnected.value || !isAuthenticated.value) {
+        console.warn('無法創建終端：連接或認證狀態不正確', {
+          hasSocket: !!socket.value,
+          isConnected: isConnected.value,
+          isAuthenticated: isAuthenticated.value
+        })
+        if (!socket.value || !isConnected.value) {
+          connectToServer()
+        }
         return
       }
 
@@ -752,14 +879,18 @@ export default {
       }
       
       tabs.value.push(newTab)
-      switchToTab(tabId)
       
-      // 創建終端會話
+      // 創建終端會話，等待伺服器確認後再切換
       const terminalSize = terminalRef.value?.getTerminalSize() || { cols: 80, rows: 24 }
+      console.log(`發送創建終端請求: ${tabId}`, terminalSize)
       socket.value.emit('create-terminal', { 
         ...terminalSize, 
         terminalId: tabId 
       })
+      
+      // 標記為當前要切換到的分頁，但不立即切換
+      // 等到 terminal-created 事件確認後再實際切換
+      switchToTab(tabId)
     }
 
     // 切換到指定分頁
@@ -853,6 +984,13 @@ export default {
       uiSettings,
       connectionSettings,
       terminalSettings,
+      // 身份驗證相關
+      showAuthDialog,
+      authKey,
+      authError,
+      isAuthenticated,
+      authInput,
+      authenticate,
       connectTerminal,
       disconnectTerminal,
       clearTerminal,
@@ -880,8 +1018,104 @@ html, body {
   padding: 0;
   height: 100%;
   overflow: hidden;
-  background-color: #1e1e1e !important;
-  -webkit-overflow-scrolling: touch;
+}
+
+/* 身份驗證對話框樣式 */
+.auth-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  backdrop-filter: blur(4px);
+}
+
+.auth-dialog {
+  background: #1e1e1e;
+  border: 1px solid #3e3e3e;
+  border-radius: 8px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.auth-dialog h3 {
+  margin: 0 0 12px 0;
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.auth-dialog p {
+  margin: 0 0 20px 0;
+  color: #cccccc;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-input-group {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.auth-input {
+  flex: 1;
+  background: #2d2d2d;
+  border: 1px solid #4e4e4e;
+  border-radius: 4px;
+  padding: 10px 12px;
+  color: #ffffff;
+  font-size: 14px;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 1px;
+}
+
+.auth-input:focus {
+  outline: none;
+  border-color: #007acc;
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
+
+.auth-input::placeholder {
+  color: #888888;
+}
+
+.auth-btn {
+  background: #007acc;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 16px;
+  color: #ffffff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.auth-btn:hover:not(:disabled) {
+  background: #005a9e;
+}
+
+.auth-btn:disabled {
+  background: #4e4e4e;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.auth-error {
+  color: #f48771;
+  font-size: 12px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(244, 135, 113, 0.1);
+  border: 1px solid rgba(244, 135, 113, 0.3);
+  border-radius: 4px;
 }
 
 /* 全局滾動條樣式 */

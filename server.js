@@ -4,9 +4,27 @@ const socketIo = require('socket.io');
 const pty = require('node-pty');
 const cors = require('cors');
 const os = require('os');
+const crypto = require('crypto');
 
 const app = express();
 const server = http.createServer(app);
+
+// 生成隨機密鑰
+const generateAuthKey = () => {
+  return crypto.randomBytes(16).toString('hex').toUpperCase().match(/.{1,4}/g).join('-');
+};
+
+// 每次啟動時生成新的身份驗證密鑰
+const AUTH_KEY = generateAuthKey();
+console.log('='.repeat(60));
+console.log('🔐 WebTerminal 身份驗證密鑰');
+console.log('='.repeat(60));
+console.log(`密鑰: ${AUTH_KEY}`);
+console.log('請在前端輸入此密鑰以連接到終端服務');
+console.log('='.repeat(60));
+
+// 存儲已驗證的連接
+const authenticatedConnections = new Set();
 
 // 配置 CORS
 app.use(cors({
@@ -48,11 +66,36 @@ io.on('connection', (socket) => {
   console.log(`連接時間: ${new Date().toISOString()}`);
   console.log('---');
 
-  // 初始化該socket的終端容器
-  terminals[socket.id] = {};
+  // 先要求身份驗證
+  socket.on('authenticate', (data) => {
+    const { key } = data;
+    
+    if (key === AUTH_KEY) {
+      authenticatedConnections.add(socket.id);
+      socket.emit('auth-success', { message: '驗證成功' });
+      console.log(`客戶端 ${socket.id} 驗證成功`);
+      
+      // 初始化該socket的終端容器
+      terminals[socket.id] = {};
+    } else {
+      socket.emit('auth-failed', { message: '密鑰錯誤，請重新輸入' });
+      console.log(`客戶端 ${socket.id} 驗證失敗`);
+    }
+  });
+  
+  // 驗證中間件 - 檢查所有終端相關操作
+  const requireAuth = (eventName, handler) => {
+    socket.on(eventName, (...args) => {
+      if (!authenticatedConnections.has(socket.id)) {
+        socket.emit('auth-required', { message: '請先進行身份驗證' });
+        return;
+      }
+      handler(...args);
+    });
+  };
 
-  // 創建新終端會話
-  socket.on('create-terminal', (data) => {
+  // 創建新終端會話 - 需要驗證
+  requireAuth('create-terminal', (data) => {
     const { rows = 24, cols = 80, terminalId } = data || {};
     
     if (!terminalId) {
@@ -117,47 +160,43 @@ io.on('connection', (socket) => {
     }
   });
 
-  // 處理終端輸入
-  socket.on('terminal-input', (data) => {
-    const { input, terminalId } = typeof data === 'string' ? { input: data, terminalId: null } : data;
+  // 處理終端輸入 - 需要驗證
+  requireAuth('terminal-input', (data) => {
+    const { input, terminalId } = data;
     
-    if (terminalId) {
-      // 新的多終端方式
-      const terminal = terminals[socket.id] && terminals[socket.id][terminalId];
-      if (terminal && terminal.ptyProcess) {
+    if (terminalId && terminals[socket.id] && terminals[socket.id][terminalId]) {
+      const terminal = terminals[socket.id][terminalId];
+      try {
         terminal.ptyProcess.write(input);
+      } catch (error) {
+        console.error('寫入終端失敗:', error);
+        socket.emit('terminal-error', { message: '寫入終端失敗', terminalId });
       }
     } else {
-      // 向後兼容單終端方式（可選）
-      const socketTerminals = terminals[socket.id];
-      if (socketTerminals) {
-        const firstTerminal = Object.values(socketTerminals)[0];
-        if (firstTerminal && firstTerminal.ptyProcess) {
-          firstTerminal.ptyProcess.write(input);
-        }
-      }
+      socket.emit('terminal-error', { 
+        message: `未找到終端會話: ${terminalId}`, 
+        terminalId 
+      });
     }
   });
 
-  // 調整終端大小
-  socket.on('terminal-resize', (data) => {
+  // 處理終端大小調整 - 需要驗證
+  requireAuth('terminal-resize', (data) => {
     const { cols, rows, terminalId } = data;
     
-    if (terminalId) {
-      const terminal = terminals[socket.id] && terminals[socket.id][terminalId];
-      if (terminal && terminal.ptyProcess) {
-        try {
-          terminal.ptyProcess.resize(cols, rows);
-          console.log(`調整終端 ${socket.id}/${terminalId} 大小: ${cols}x${rows}`);
-        } catch (error) {
-          console.error('調整終端大小失敗:', error);
-        }
+    if (terminalId && terminals[socket.id] && terminals[socket.id][terminalId]) {
+      const terminal = terminals[socket.id][terminalId];
+      try {
+        terminal.ptyProcess.resize(cols, rows);
+        console.log(`調整終端 ${socket.id}/${terminalId} 大小為 ${cols}x${rows}`);
+      } catch (error) {
+        console.error('調整終端大小失敗:', error);
       }
     }
   });
 
-  // 關閉特定終端
-  socket.on('close-terminal', (data) => {
+  // 關閉特定終端 - 需要驗證
+  requireAuth('close-terminal', (data) => {
     const { terminalId } = data;
     if (terminalId && terminals[socket.id] && terminals[socket.id][terminalId]) {
       const terminal = terminals[socket.id][terminalId];
@@ -183,6 +222,9 @@ io.on('connection', (socket) => {
     console.log(`客戶端 IP: ${clientIP}`);
     console.log(`斷開時間: ${new Date().toISOString()}`);
     
+    // 移除身份驗證記錄
+    authenticatedConnections.delete(socket.id);
+    
     const socketTerminals = terminals[socket.id];
     if (socketTerminals) {
       // 關閉該socket的所有終端
@@ -200,94 +242,25 @@ io.on('connection', (socket) => {
     console.log('---');
   });
 
-  // 獲取終端信息
-  socket.on('get-terminal-info', (data) => {
-    const { terminalId } = data || {};
-    const clientIP = socket.handshake.headers['x-forwarded-for'] || 
-                     socket.handshake.headers['x-real-ip'] || 
-                     socket.conn.remoteAddress || 
-                     socket.handshake.address;
-    
-    if (terminalId && terminals[socket.id] && terminals[socket.id][terminalId]) {
-      const terminal = terminals[socket.id][terminalId];
-      socket.emit('terminal-info', {
-        pid: terminal.ptyProcess.pid,
-        shell: shell,
-        platform: os.platform(),
-        arch: os.arch(),
-        clientIP: clientIP,
-        socketId: socket.id,
-        terminalId: terminalId,
-        connectedAt: new Date().toISOString()
-      });
-    }
-  });
-
-  // 獲取服務器統計信息
-  socket.on('get-server-stats', () => {
-    let totalTerminals = 0;
-    const connectedClients = [];
-    
-    Object.keys(terminals).forEach(socketId => {
-      const socketTerminals = terminals[socketId];
-      if (socketTerminals) {
-        const terminalIds = Object.keys(socketTerminals);
-        totalTerminals += terminalIds.length;
-        
-        if (terminalIds.length > 0) {
-          const firstTerminal = socketTerminals[terminalIds[0]];
-          const clientSocket = firstTerminal.socket;
-          const clientIP = clientSocket.handshake.headers['x-forwarded-for'] || 
-                           clientSocket.handshake.headers['x-real-ip'] || 
-                           clientSocket.conn.remoteAddress || 
-                           clientSocket.handshake.address;
-          
-          connectedClients.push({
-            socketId: socketId,
-            clientIP: clientIP,
-            terminalCount: terminalIds.length,
-            terminals: terminalIds.map(terminalId => ({
-              terminalId,
-              pid: socketTerminals[terminalId].ptyProcess.pid
-            })),
-            userAgent: clientSocket.handshake.headers['user-agent'] || 'Unknown'
-          });
-        }
-      }
-    });
-
-    // 獲取系統記憶體資訊
-    const memoryUsage = process.memoryUsage();
-    const totalMemory = os.totalmem();
-    const freeMemory = os.freemem();
-    const usedMemory = totalMemory - freeMemory;
-
-    socket.emit('server-stats', {
-      totalConnections: Object.keys(terminals).length,
-      totalTerminals: totalTerminals,
-      connectedClients: connectedClients,
+  // 獲取服務器統計信息 - 需要驗證
+  requireAuth('get-server-stats', () => {
+    const stats = {
       serverUptime: process.uptime(),
+      memoryUsage: process.memoryUsage(),
       platform: os.platform(),
       arch: os.arch(),
       nodeVersion: process.version,
-      systemMemory: {
-        total: totalMemory,
-        used: usedMemory,
-        free: freeMemory,
-        usagePercent: ((usedMemory / totalMemory) * 100).toFixed(1)
-      },
-      processMemory: {
-        rss: memoryUsage.rss,
-        heapTotal: memoryUsage.heapTotal,
-        heapUsed: memoryUsage.heapUsed,
-        external: memoryUsage.external
-      },
+      activeTerminals: Object.keys(terminals).length,
+      totalConnections: io.engine.clientsCount,
+      hostname: os.hostname(),
       cpuInfo: {
         model: os.cpus()[0]?.model || 'Unknown',
         cores: os.cpus().length,
         loadAvg: os.loadavg()
       }
-    });
+    };
+    
+    socket.emit('server-stats', stats);
   });
 });
 

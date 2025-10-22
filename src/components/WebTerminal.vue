@@ -192,10 +192,12 @@ export default {
         }
       }
 
-      // 創建或獲取目標終端
+      // 獲取目標終端實例（只有在伺服器確認創建成功後才會存在）
       let targetInstance = terminals.value[terminalId]
       if (!targetInstance) {
-        targetInstance = createTerminal(terminalId)
+        console.warn(`嘗試切換到不存在的終端: ${terminalId}，等待伺服器創建...`)
+        currentTerminalId.value = terminalId // 記錄目標終端ID
+        return
       }
 
       // 顯示目標終端
@@ -262,8 +264,12 @@ export default {
 
         newSocket.on('terminal-created', (data) => {
           console.log('終端創建成功:', data)
-          // 終端創建成功後自動切換
+          // 終端創建成功後創建前端實例並切換
           if (data.terminalId) {
+            // 確保前端終端實例存在
+            if (!terminals.value[data.terminalId]) {
+              createTerminal(data.terminalId)
+            }
             switchTerminal(data.terminalId)
           }
         })
