@@ -2,15 +2,8 @@
   <div id="app">
     <!-- 頂部工具欄 -->
     <div class="top-toolbar">
-      <!-- 服務器資訊欄 -->
-      <div class="server-info" v-if="isConnected">
-        <span class="info-item">總連接: {{ serverStats.totalConnections }}</span>
-        <span class="info-item">運行時間: {{ formatUptime(serverStats.serverUptime) }}</span>
-        <span class="info-item">{{ serverStats.nodeVersion }}</span>
-      </div>
-
-      <!-- 控制按鈕 -->
-      <div class="control-buttons">
+      <!-- 左側：連接狀態和控制 -->
+      <div class="left-controls">
         <!-- 連接狀態按鈕 -->
         <button 
           @click="isConnected ? disconnectTerminal() : connectTerminal()" 
@@ -20,6 +13,61 @@
         >
           <span :class="['status-indicator', connectionStatus]"></span>
           <span class="status-text">{{ connectionText }}</span>
+        </button>
+      </div>
+
+      <!-- 中間：系統狀態資訊 -->
+      <div class="server-info" v-if="isConnected">
+        <span class="info-item" title="當前工作目錄">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V9C21 7.89543 20.1046 7 19 7H5C3.89543 7 3 7.89543 3 9V7Z" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M3 7L10 7C10 5.89543 10.8954 5 12 5H19C20.1046 5 21 5.89543 21 7" stroke="currentColor" stroke-width="2" fill="none"/>
+          </svg>
+          {{ currentWorkingDir }}
+        </span>
+        <span class="info-item" title="活躍終端數">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M6 8l4 4-4 4M12 16h6" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          {{ tabs.length }} 個終端
+        </span>
+        <span class="info-item" title="系統平台">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M12 2C13.5 4 16 7 16 12C16 17 13.5 20 12 22C10.5 20 8 17 8 12C8 7 10.5 4 12 2Z" stroke="currentColor" stroke-width="2" fill="none"/>
+          </svg>
+          {{ systemInfo.platform }}
+        </span>
+        <span class="info-item" title="記憶體使用量" v-if="systemInfo.memoryUsage">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="3" y="4" width="18" height="2" rx="1" fill="currentColor"/>
+            <rect x="3" y="8" width="18" height="2" rx="1" fill="currentColor"/>
+            <rect x="3" y="12" width="18" height="2" rx="1" fill="currentColor"/>
+            <rect x="3" y="16" width="18" height="2" rx="1" fill="currentColor"/>
+          </svg>
+          {{ formatMemoryUsage(systemInfo.memoryUsage) }}
+        </span>
+        <span class="info-item" title="服務器運行時間">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/>
+            <polyline points="12,6 12,12 16,14" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          {{ formatUptime(serverStats.serverUptime) }}
+        </span>
+      </div>
+
+      <!-- 右側：設定按鈕 -->
+      <div class="right-controls">
+        <button 
+          @click="toggleSettings" 
+          class="settings-btn"
+          title="設定"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1m15.5-5L19 7.5m-2.5 9L19 16.5M7.5 7.5L5 5m2.5 9L5 16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
         </button>
       </div>
     
@@ -108,6 +156,183 @@
         </div>
       </div>
     </div>
+
+    <!-- 設定面板 -->
+    <div v-if="showSettings" class="settings-overlay" @click="closeSettings">
+      <div class="settings-panel" @click.stop>
+        <div class="settings-header">
+          <h3>系統設定</h3>
+          <button @click="closeSettings" class="close-btn">✕</button>
+        </div>
+        
+        <div class="settings-content">
+          <!-- 介面設定 -->
+          <div class="settings-section">
+            <h4>介面設定</h4>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">主題</span>
+                <select v-model="uiSettings.theme" class="setting-select">
+                  <option value="dark">深色主題</option>
+                  <option value="light">淺色主題</option>
+                  <option value="auto">自動</option>
+                </select>
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">字體大小</span>
+                <select v-model="uiSettings.fontSize" class="setting-select">
+                  <option value="12">12px</option>
+                  <option value="13">13px</option>
+                  <option value="14">14px</option>
+                  <option value="15">15px</option>
+                  <option value="16">16px</option>
+                  <option value="18">18px</option>
+                </select>
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input
+                  type="checkbox"
+                  v-model="uiSettings.showTimestamps"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">顯示時間戳</span>
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input
+                  type="checkbox"
+                  v-model="uiSettings.autoScroll"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">自動滾動</span>
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">最大輸出行數</span>
+                <input 
+                  type="number" 
+                  v-model="uiSettings.maxOutputLines"
+                  class="setting-input"
+                  min="100"
+                  max="5000"
+                  step="100"
+                />
+              </label>
+            </div>
+          </div>
+
+          <!-- 連線設定 -->
+          <div class="settings-section">
+            <h4>連線設定</h4>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">服務器地址</span>
+                <input 
+                  type="text" 
+                  v-model="connectionSettings.serverUrl"
+                  class="setting-input"
+                  placeholder="ws://localhost:3000"
+                />
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">重連間隔 (秒)</span>
+                <input 
+                  type="number" 
+                  v-model="connectionSettings.reconnectInterval"
+                  class="setting-input"
+                  min="1"
+                  max="60"
+                />
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">最大重連次數</span>
+                <input 
+                  type="number" 
+                  v-model="connectionSettings.maxReconnectAttempts"
+                  class="setting-input"
+                  min="0"
+                  max="100"
+                />
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input
+                  type="checkbox"
+                  v-model="connectionSettings.autoConnect"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">啟動時自動連接</span>
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input
+                  type="checkbox"
+                  v-model="connectionSettings.autoReconnect"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">自動重新連接</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- 終端設定 -->
+          <div class="settings-section">
+            <h4>終端設定</h4>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <span class="setting-text">命令歷史記錄數量</span>
+                <input 
+                  type="number" 
+                  v-model="terminalSettings.historySize"
+                  class="setting-input"
+                  min="10"
+                  max="500"
+                />
+              </label>
+            </div>
+            
+            <div class="setting-item">
+              <label class="setting-label">
+                <input
+                  type="checkbox"
+                  v-model="terminalSettings.persistentSessions"
+                  class="setting-checkbox"
+                />
+                <span class="setting-text">持久化終端會話</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        
+        <div class="settings-footer">
+          <button @click="resetSettings" class="btn btn-secondary">重設為預設值</button>
+          <button @click="saveSettings" class="btn btn-primary">儲存設定</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -151,6 +376,62 @@ export default {
       visible: false
     })
 
+    // 系統資訊
+    const systemInfo = reactive({
+      platform: 'Unknown',
+      arch: 'Unknown',
+      memoryUsage: null,
+      cpuUsage: null,
+      nodeVersion: 'Unknown'
+    })
+
+    // 當前工作目錄（從活躍終端獲取）
+    const currentWorkingDir = computed(() => {
+      const activeTab = tabs.value.find(tab => tab.id === activeTabId.value)
+      if (activeTab && activeTab.workingDirectory) {
+        // 縮短路徑顯示
+        const path = activeTab.workingDirectory
+        if (path.length > 40) {
+          const parts = path.split(/[/\\]/)
+          if (parts.length > 3) {
+            return `${parts[0]}${path.includes('\\') ? '\\' : '/'}...${path.includes('\\') ? '\\' : '/'}${parts[parts.length-1]}`
+          }
+        }
+        return path
+      }
+      // 使用系統資訊中的平台資訊，或者根據路徑分隔符判斷
+      const isWindows = systemInfo.platform === 'win32' || 
+                       (systemInfo.platform === 'Unknown' && navigator.platform.includes('Win'))
+      return isWindows ? 'C:\\' : '~'
+    })
+
+    // 設定面板狀態
+    const showSettings = ref(false)
+    
+    // 介面設定
+    const uiSettings = reactive({
+      theme: 'dark',
+      fontSize: 14,
+      showTimestamps: true,
+      autoScroll: true,
+      maxOutputLines: 1000
+    })
+    
+    // 連線設定
+    const connectionSettings = reactive({
+      serverUrl: 'ws://localhost:3000',
+      reconnectInterval: 3,
+      maxReconnectAttempts: 10,
+      autoConnect: true,
+      autoReconnect: true
+    })
+    
+    // 終端設定
+    const terminalSettings = reactive({
+      historySize: 100,
+      persistentSessions: true
+    })
+
     const connectionText = computed(() => {
       switch (connectionStatus.value) {
         case 'connected': return '已連接'
@@ -167,8 +448,9 @@ export default {
 
       connectionStatus.value = 'connecting'
       
-      // 使用相對路徑，通過 Vite 代理連接到服務器
-      socket.value = io('/', {
+      // 使用設定中的服務器地址，如果是開發模式則使用代理
+      const serverUrl = import.meta.env.DEV ? '/' : connectionSettings.serverUrl
+      socket.value = io(serverUrl, {
         transports: ['websocket', 'polling']
       })
 
@@ -247,7 +529,23 @@ export default {
       socket.value.on('server-stats', (data) => {
         console.log('服務器統計信息:', data)
         Object.assign(serverStats, data)
-        // 不再自動顯示浮動窗口
+        
+        // 更新系統資訊
+        if (data.systemMemory) {
+          systemInfo.memoryUsage = data.systemMemory
+        }
+        if (data.cpuInfo) {
+          systemInfo.cpuUsage = data.cpuInfo
+        }
+        if (data.platform) {
+          systemInfo.platform = data.platform
+        }
+        if (data.arch) {
+          systemInfo.arch = data.arch
+        }
+        if (data.nodeVersion) {
+          systemInfo.nodeVersion = data.nodeVersion
+        }
       })
     }
 
@@ -273,6 +571,109 @@ export default {
         connectionStatus.value = 'disconnected'
         terminalInfo.pid = null
       }
+    }
+
+    // 設定管理方法
+    const toggleSettings = () => {
+      showSettings.value = !showSettings.value
+    }
+
+    const closeSettings = () => {
+      showSettings.value = false
+    }
+
+    const saveSettings = () => {
+      try {
+        // 儲存到 localStorage
+        localStorage.setItem('uiSettings', JSON.stringify(uiSettings))
+        localStorage.setItem('connectionSettings', JSON.stringify(connectionSettings))
+        localStorage.setItem('terminalSettings', JSON.stringify(terminalSettings))
+        
+        // 應用設定
+        applySettings()
+        
+        // 顯示成功訊息（如果需要的話）
+        console.log('設定已儲存')
+        
+        closeSettings()
+      } catch (error) {
+        console.error('儲存設定失敗:', error)
+        alert('儲存設定失敗，請稍後再試')
+      }
+    }
+
+    const resetSettings = () => {
+      if (confirm('確定要重設所有設定為預設值嗎？')) {
+        // 重設為預設值
+        Object.assign(uiSettings, {
+          theme: 'dark',
+          fontSize: 14,
+          showTimestamps: true,
+          autoScroll: true,
+          maxOutputLines: 1000
+        })
+        
+        Object.assign(connectionSettings, {
+          serverUrl: 'ws://localhost:3000',
+          reconnectInterval: 3,
+          maxReconnectAttempts: 10,
+          autoConnect: true,
+          autoReconnect: true
+        })
+        
+        Object.assign(terminalSettings, {
+          historySize: 100,
+          persistentSessions: true
+        })
+        
+        // 清除 localStorage
+        localStorage.removeItem('uiSettings')
+        localStorage.removeItem('connectionSettings')
+        localStorage.removeItem('terminalSettings')
+        
+        applySettings()
+        console.log('設定已重設為預設值')
+      }
+    }
+
+    const loadSettings = () => {
+      try {
+        // 從 localStorage 載入設定
+        const savedUiSettings = localStorage.getItem('uiSettings')
+        if (savedUiSettings) {
+          Object.assign(uiSettings, JSON.parse(savedUiSettings))
+        }
+        
+        const savedConnectionSettings = localStorage.getItem('connectionSettings')
+        if (savedConnectionSettings) {
+          Object.assign(connectionSettings, JSON.parse(savedConnectionSettings))
+        }
+        
+        const savedTerminalSettings = localStorage.getItem('terminalSettings')
+        if (savedTerminalSettings) {
+          Object.assign(terminalSettings, JSON.parse(savedTerminalSettings))
+        }
+        
+        applySettings()
+      } catch (error) {
+        console.error('載入設定失敗:', error)
+      }
+    }
+
+    const applySettings = () => {
+      // 應用主題設定
+      if (uiSettings.theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light')
+      } else if (uiSettings.theme === 'dark') {
+        document.documentElement.setAttribute('data-theme', 'dark')
+      } else {
+        // 自動模式
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+        document.documentElement.setAttribute('data-theme', prefersDark ? 'dark' : 'light')
+      }
+      
+      // 應用字體大小
+      document.documentElement.style.setProperty('--terminal-font-size', `${uiSettings.fontSize}px`)
     }
 
     // 清空終端
@@ -305,6 +706,22 @@ export default {
       if (secs > 0) parts.push(`${secs}秒`)
       
       return parts.join(' ') || '0秒'
+    }
+
+    // 格式化記憶體使用量
+    const formatMemoryUsage = (memoryInfo) => {
+      if (!memoryInfo) return 'N/A'
+      
+      const formatBytes = (bytes) => {
+        if (bytes === 0) return '0 B'
+        const k = 1024
+        const sizes = ['B', 'KB', 'MB', 'GB']
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+      }
+      
+      const usedPercent = ((memoryInfo.used / memoryInfo.total) * 100).toFixed(1)
+      return `${formatBytes(memoryInfo.used)}/${formatBytes(memoryInfo.total)} (${usedPercent}%)`
     }
 
     // 處理終端尺寸變更
@@ -401,7 +818,10 @@ export default {
 
     // 組件掛載時自動連接
     onMounted(() => {
-      connectToServer()
+      loadSettings()
+      if (connectionSettings.autoConnect) {
+        connectToServer()
+      }
     })
 
     // 監聽連接狀態，連接成功後創建第一個分頁
@@ -424,18 +844,29 @@ export default {
       terminalRef,
       terminalInfo,
       serverStats,
+      systemInfo,
+      currentWorkingDir,
       tabs,
       activeTabId,
+      showSettings,
+      uiSettings,
+      connectionSettings,
+      terminalSettings,
       connectTerminal,
       disconnectTerminal,
       clearTerminal,
       getServerStats,
       formatUptime,
+      formatMemoryUsage,
       handleTerminalResize,
       createNewTab,
       switchToTab,
       closeTab,
-      renameTab
+      renameTab,
+      toggleSettings,
+      closeSettings,
+      saveSettings,
+      resetSettings
     }
   }
 }
@@ -450,6 +881,35 @@ html, body {
   overflow: hidden;
   background-color: #1e1e1e !important;
   -webkit-overflow-scrolling: touch;
+}
+
+/* 全局滾動條樣式 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4a4a4a #1e1e1e;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: #1e1e1e;
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #4a4a4a;
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #5a5a5a;
+}
+
+*::-webkit-scrollbar-corner {
+  background: #1e1e1e;
 }
 
 #app {
@@ -486,6 +946,14 @@ html, body {
   gap: 12px;
 }
 
+/* 左側控制區域 */
+.left-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 /* 服務器資訊欄 */
 .server-info {
   display: flex;
@@ -496,21 +964,21 @@ html, body {
   font-size: 11px;
   font-family: 'Courier New', monospace;
   min-width: 0; /* 允許彈性收縮 */
+  justify-content: flex-end; /* 向右對齊 */
 }
 
 .info-item {
   white-space: nowrap;
   display: flex;
   align-items: center;
+  gap: 8px;
   min-width: 0;
   overflow: hidden;
 }
 
-/* 控制按鈕 */
-.control-buttons {
-  display: flex;
-  gap: 4px;
+.info-item svg {
   flex-shrink: 0;
+  opacity: 0.8;
 }
 
 /* 連接狀態按鈕 */
@@ -608,9 +1076,8 @@ html, body {
   justify-content: center;
 }
 
-/* 統一 control-buttons 內所有按鈕的 hover 效果 */
-.control-buttons .btn:hover,
-.control-buttons .connection-status-btn:hover {
+/* 連接狀態按鈕 hover 效果 */
+.connection-status-btn:hover {
   background-color: #3e3e3e;
 }
 
@@ -897,8 +1364,8 @@ html, body {
     padding: 6px;
   }
   
-  .control-buttons {
-    gap: 2px;
+  .left-controls {
+    gap: 4px;
   }
   
   .btn-icon {
@@ -929,6 +1396,268 @@ html, body {
   
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* 右側控制區域 */
+.right-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 設定按鈕 */
+.settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background-color: transparent;
+  border: none;
+  border-radius: 6px;
+  color: #888;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  opacity: 0.8;
+}
+
+.settings-btn:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #b8b8b8;
+  opacity: 1;
+}
+
+.settings-btn:active {
+  background-color: rgba(255, 255, 255, 0.1);
+  transform: scale(0.95);
+}
+
+/* 設定面板遮罩 */
+.settings-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* 設定面板 */
+.settings-panel {
+  background-color: #2d2d2d;
+  border: 1px solid #3e3e3e;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  animation: slideIn 0.3s ease-out;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(-50px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* 設定面板標題 */
+.settings-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #3e3e3e;
+  background-color: #363636;
+  border-radius: 8px 8px 0 0;
+}
+
+.settings-header h3 {
+  margin: 0;
+  color: #e1e1e1;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.close-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: none;
+  color: #999;
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.close-btn:hover {
+  background-color: #ff4757;
+  color: white;
+}
+
+/* 設定內容 */
+.settings-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.settings-section {
+  padding: 20px;
+  border-bottom: 1px solid #3e3e3e;
+}
+
+.settings-section:last-child {
+  border-bottom: none;
+}
+
+.settings-section h4 {
+  margin: 0 0 16px 0;
+  color: #4a9eff;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* 設定項目 */
+.setting-item {
+  margin-bottom: 16px;
+}
+
+.setting-item:last-child {
+  margin-bottom: 0;
+}
+
+.setting-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.setting-text {
+  color: #e1e1e1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.setting-input,
+.setting-select {
+  background-color: #1a1a1a;
+  border: 1px solid #555;
+  border-radius: 4px;
+  padding: 8px 12px;
+  color: #e1e1e1;
+  font-size: 14px;
+  transition: border-color 0.2s ease;
+}
+
+.setting-input:focus,
+.setting-select:focus {
+  outline: none;
+  border-color: #4a9eff;
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.setting-checkbox {
+  width: 16px;
+  height: 16px;
+  margin-right: 8px;
+  accent-color: #4a9eff;
+}
+
+.setting-label:has(.setting-checkbox) {
+  flex-direction: row;
+  align-items: center;
+}
+
+/* 設定面板底部 */
+.settings-footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-top: 1px solid #3e3e3e;
+  background-color: #363636;
+  border-radius: 0 0 8px 8px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary {
+  background-color: #6c757d;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: #5a6268;
+}
+
+.btn-primary {
+  background-color: #4a9eff;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #3182ce;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+  .settings-panel {
+    width: 95%;
+    max-height: 90vh;
+  }
+  
+  .settings-header,
+  .settings-footer {
+    padding: 12px 16px;
+  }
+  
+  .settings-section {
+    padding: 16px;
+  }
+  
+  .settings-footer {
+    flex-direction: column;
+    gap: 8px;
+  }
+  
+  .btn {
+    width: 100%;
   }
 }
 </style>

@@ -89,7 +89,17 @@ io.on('connection', (socket) => {
       // 監聽終端進程退出
       ptyProcess.onExit((exitCode) => {
         console.log(`終端 ${socket.id}/${terminalId} 退出，代碼: ${exitCode}`);
-        delete terminals[socket.id][terminalId];
+        
+        // 安全地刪除終端記錄
+        if (terminals[socket.id] && terminals[socket.id][terminalId]) {
+          delete terminals[socket.id][terminalId];
+          
+          // 如果該客戶端沒有其他終端了，清理整個客戶端記錄
+          if (Object.keys(terminals[socket.id]).length === 0) {
+            delete terminals[socket.id];
+          }
+        }
+        
         socket.emit('terminal-exit', { exitCode, terminalId });
       });
 
@@ -246,6 +256,12 @@ io.on('connection', (socket) => {
       }
     });
 
+    // 獲取系統記憶體資訊
+    const memoryUsage = process.memoryUsage();
+    const totalMemory = os.totalmem();
+    const freeMemory = os.freemem();
+    const usedMemory = totalMemory - freeMemory;
+
     socket.emit('server-stats', {
       totalConnections: Object.keys(terminals).length,
       totalTerminals: totalTerminals,
@@ -253,7 +269,24 @@ io.on('connection', (socket) => {
       serverUptime: process.uptime(),
       platform: os.platform(),
       arch: os.arch(),
-      nodeVersion: process.version
+      nodeVersion: process.version,
+      systemMemory: {
+        total: totalMemory,
+        used: usedMemory,
+        free: freeMemory,
+        usagePercent: ((usedMemory / totalMemory) * 100).toFixed(1)
+      },
+      processMemory: {
+        rss: memoryUsage.rss,
+        heapTotal: memoryUsage.heapTotal,
+        heapUsed: memoryUsage.heapUsed,
+        external: memoryUsage.external
+      },
+      cpuInfo: {
+        model: os.cpus()[0]?.model || 'Unknown',
+        cores: os.cpus().length,
+        loadAvg: os.loadavg()
+      }
     });
   });
 });
