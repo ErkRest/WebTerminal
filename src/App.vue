@@ -65,8 +65,9 @@
           title="設定"
         >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1m15.5-5L19 7.5m-2.5 9L19 16.5M7.5 7.5L5 5m2.5 9L5 16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+            <circle cx="12" cy="5" r="2" fill="currentColor"/>
+            <circle cx="12" cy="12" r="2" fill="currentColor"/>
+            <circle cx="12" cy="19" r="2" fill="currentColor"/>
           </svg>
         </button>
       </div>
