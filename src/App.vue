@@ -42,13 +42,13 @@
 
       <!-- 中間：系統狀態資訊 -->
       <div class="server-info" v-if="isConnected">
-        <span class="info-item" title="當前工作目錄">
+        <!-- <span class="info-item" title="當前工作目錄">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M3 7V17C3 18.1046 3.89543 19 5 19H19C20.1046 19 21 18.1046 21 17V9C21 7.89543 20.1046 7 19 7H5C3.89543 7 3 7.89543 3 9V7Z" stroke="currentColor" stroke-width="2" fill="none"/>
             <path d="M3 7L10 7C10 5.89543 10.8954 5 12 5H19C20.1046 5 21 5.89543 21 7" stroke="currentColor" stroke-width="2" fill="none"/>
           </svg>
           {{ currentWorkingDir }}
-        </span>
+        </span> -->
         <span class="info-item" title="活躍終端數">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
@@ -63,6 +63,37 @@
           </svg>
           {{ systemInfo.platform }}
         </span>
+        <span class="info-item" title="主機名稱" v-if="systemInfo.hostname && systemInfo.hostname !== 'Unknown'">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" stroke="currentColor" stroke-width="2" fill="none"/>
+            <line x1="8" y1="21" x2="16" y2="21" stroke="currentColor" stroke-width="2"/>
+            <line x1="12" y1="17" x2="12" y2="21" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          {{ systemInfo.hostname }}
+        </span>
+        <span class="info-item" title="Node.js 版本" v-if="systemInfo.nodeVersion && systemInfo.nodeVersion !== 'Unknown'">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" fill="none"/>
+          </svg>
+          {{ systemInfo.nodeVersion }}
+        </span>
+        <span class="info-item" title="CPU 資訊" v-if="systemInfo.cpuUsage && systemInfo.cpuUsage.cores">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="4" y="4" width="16" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/>
+            <rect x="9" y="9" width="6" height="6" rx="1" stroke="currentColor" stroke-width="2" fill="none"/>
+            <line x1="9" y1="1" x2="9" y2="4" stroke="currentColor" stroke-width="2"/>
+            <line x1="15" y1="1" x2="15" y2="4" stroke="currentColor" stroke-width="2"/>
+            <line x1="9" y1="20" x2="9" y2="23" stroke="currentColor" stroke-width="2"/>
+            <line x1="15" y1="20" x2="15" y2="23" stroke="currentColor" stroke-width="2"/>
+            <line x1="20" y1="9" x2="23" y2="9" stroke="currentColor" stroke-width="2"/>
+            <line x1="20" y1="14" x2="23" y2="14" stroke="currentColor" stroke-width="2"/>
+            <line x1="1" y1="9" x2="4" y2="9" stroke="currentColor" stroke-width="2"/>
+            <line x1="1" y1="14" x2="4" y2="14" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          {{ systemInfo.cpuUsage.cores }} 核心
+        </span>
         <span class="info-item" title="記憶體使用量" v-if="systemInfo.memoryUsage">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <rect x="3" y="4" width="18" height="2" rx="1" fill="currentColor"/>
@@ -72,13 +103,22 @@
           </svg>
           {{ formatMemoryUsage(systemInfo.memoryUsage) }}
         </span>
-        <span class="info-item" title="服務器運行時間">
+        <span class="info-item" title="連接數 / 活躍終端">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" stroke="currentColor" stroke-width="2" fill="none"/>
+            <rect x="8" y="2" width="8" height="4" rx="1" ry="1" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M12 11h4" stroke="currentColor" stroke-width="2"/>
+            <path d="M12 16h4" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          {{ systemInfo.totalConnections }} / {{ systemInfo.activeTerminals }}
+        </span>
+        <!-- <span class="info-item" title="服務器運行時間">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/>
             <polyline points="12,6 12,12 16,14" stroke="currentColor" stroke-width="2"/>
           </svg>
           {{ formatUptime(serverStats.serverUptime) }}
-        </span>
+        </span> -->
       </div>
 
       <!-- 右側：設定按鈕 -->
@@ -359,6 +399,8 @@
       </div>
     </div>
   </div>
+
+
 </template>
 
 <script>
@@ -414,7 +456,10 @@ export default {
       arch: 'Unknown',
       memoryUsage: null,
       cpuUsage: null,
-      nodeVersion: 'Unknown'
+      nodeVersion: 'Unknown',
+      hostname: 'Unknown',
+      activeTerminals: 0,
+      totalConnections: 0
     })
 
     // 當前工作目錄（從活躍終端獲取）
@@ -439,6 +484,9 @@ export default {
 
     // 設定面板狀態
     const showSettings = ref(false)
+    
+    // 系統狀態更新時間
+    const lastStatsUpdate = ref(null)
     
     // 介面設定
     const uiSettings = reactive({
@@ -624,9 +672,12 @@ export default {
         console.log('服務器統計信息:', data)
         Object.assign(serverStats, data)
         
+        // 記錄更新時間
+        lastStatsUpdate.value = Date.now()
+        
         // 更新系統資訊
-        if (data.systemMemory) {
-          systemInfo.memoryUsage = data.systemMemory
+        if (data.memoryUsage) {
+          systemInfo.memoryUsage = data.memoryUsage
         }
         if (data.cpuInfo) {
           systemInfo.cpuUsage = data.cpuInfo
@@ -639,6 +690,15 @@ export default {
         }
         if (data.nodeVersion) {
           systemInfo.nodeVersion = data.nodeVersion
+        }
+        if (data.hostname) {
+          systemInfo.hostname = data.hostname
+        }
+        if (typeof data.activeTerminals === 'number') {
+          systemInfo.activeTerminals = data.activeTerminals
+        }
+        if (typeof data.totalConnections === 'number') {
+          systemInfo.totalConnections = data.totalConnections
         }
       })
     }
@@ -841,8 +901,57 @@ export default {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
       }
       
-      const usedPercent = ((memoryInfo.used / memoryInfo.total) * 100).toFixed(1)
-      return `${formatBytes(memoryInfo.used)}/${formatBytes(memoryInfo.total)} (${usedPercent}%)`
+      // 適應 Node.js process.memoryUsage() 格式
+      if (memoryInfo.heapUsed && memoryInfo.heapTotal) {
+        const usedPercent = ((memoryInfo.heapUsed / memoryInfo.heapTotal) * 100).toFixed(1)
+        return `${formatBytes(memoryInfo.heapUsed)} / ${formatBytes(memoryInfo.heapTotal)} (${usedPercent}%)`
+      }
+      
+      // 備用格式，適應其他記憶體資訊結構
+      if (memoryInfo.used && memoryInfo.total) {
+        const usedPercent = ((memoryInfo.used / memoryInfo.total) * 100).toFixed(1)
+        return `${formatBytes(memoryInfo.used)} / ${formatBytes(memoryInfo.total)} (${usedPercent}%)`
+      }
+      
+      return 'N/A'
+    }
+
+    // 格式化詳細記憶體資訊
+    const formatDetailedMemory = (memoryInfo, type) => {
+      if (!memoryInfo) return 'N/A'
+      
+      const formatBytes = (bytes) => {
+        if (bytes === 0) return '0 B'
+        const k = 1024
+        const sizes = ['B', 'KB', 'MB', 'GB']
+        const i = Math.floor(Math.log(bytes) / Math.log(k))
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+      }
+      
+      switch (type) {
+        case 'heap':
+          return memoryInfo.heapUsed && memoryInfo.heapTotal 
+            ? `${formatBytes(memoryInfo.heapUsed)} / ${formatBytes(memoryInfo.heapTotal)}`
+            : 'N/A'
+        case 'rss':
+          return memoryInfo.rss ? formatBytes(memoryInfo.rss) : 'N/A'
+        case 'external':
+          return memoryInfo.external ? formatBytes(memoryInfo.external) : 'N/A'
+        default:
+          return 'N/A'
+      }
+    }
+
+    // 格式化 CPU 負載平均
+    const formatLoadAverage = (loadAvg) => {
+      if (!Array.isArray(loadAvg) || loadAvg.length === 0) return 'N/A'
+      return loadAvg.map(load => load.toFixed(2)).join(', ')
+    }
+
+    // 格式化時間
+    const formatTime = (timestamp) => {
+      if (!timestamp) return 'N/A'
+      return new Date(timestamp).toLocaleTimeString()
     }
 
     // 處理終端尺寸變更
@@ -948,6 +1057,31 @@ export default {
       }
     }
 
+    // 系統狀態刷新定時器
+    let statsTimer = null
+    
+    // 開始系統狀態自動刷新
+    const startStatsRefresh = () => {
+      if (statsTimer) {
+        clearInterval(statsTimer)
+      }
+      
+      // 每 10 秒更新一次系統狀態
+      statsTimer = setInterval(() => {
+        if (socket.value && isConnected.value && isAuthenticated.value) {
+          socket.value.emit('get-server-stats')
+        }
+      }, 10000) // 10 秒
+    }
+    
+    // 停止系統狀態自動刷新
+    const stopStatsRefresh = () => {
+      if (statsTimer) {
+        clearInterval(statsTimer)
+        statsTimer = null
+      }
+    }
+
     // 組件掛載時自動連接
     onMounted(() => {
       loadSettings()
@@ -962,9 +1096,23 @@ export default {
         createNewTab()
       }
     })
+    
+    // 監聽認證狀態，認證成功後開始狀態刷新
+    watch(isAuthenticated, (authenticated) => {
+      if (authenticated) {
+        startStatsRefresh()
+        // 立即獲取一次狀態
+        if (socket.value) {
+          socket.value.emit('get-server-stats')
+        }
+      } else {
+        stopStatsRefresh()
+      }
+    })
 
     // 組件卸載時斷開連接
     onUnmounted(() => {
+      stopStatsRefresh()
       disconnectTerminal()
     })
 
@@ -1005,7 +1153,12 @@ export default {
       toggleSettings,
       closeSettings,
       saveSettings,
-      resetSettings
+      resetSettings,
+      // 系統狀態更新時間
+      lastStatsUpdate,
+      formatDetailedMemory,
+      formatLoadAverage,
+      formatTime
     }
   }
 }
@@ -1893,6 +2046,118 @@ html, body {
   
   .btn {
     width: 100%;
+  }
+}
+
+
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #3e3e3e;
+  background-color: #363636;
+  border-radius: 8px 8px 0 0;
+}
+
+.panel-header h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.panel-content {
+  padding: 20px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.info-section {
+  margin-bottom: 24px;
+}
+
+.info-section:last-child {
+  margin-bottom: 0;
+}
+
+.info-section h4 {
+  margin: 0 0 12px 0;
+  color: #569cd6;
+  font-size: 14px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background-color: #2d2d2d;
+  border-radius: 4px;
+}
+
+.info-label {
+  color: #cccccc;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.info-value {
+  color: #ffffff;
+  font-size: 13px;
+  font-family: 'Courier New', monospace;
+  text-align: right;
+  max-width: 60%;
+  word-break: break-all;
+}
+
+.panel-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-top: 1px solid #3e3e3e;
+  background-color: #2d2d2d;
+  border-radius: 0 0 8px 8px;
+}
+
+.update-time {
+  font-size: 12px;
+  color: #cccccc;
+}
+
+
+
+@media (max-width: 768px) {
+  .system-info-panel {
+    width: 95vw;
+    margin: 0 auto;
+  }
+  
+  .info-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  
+  .info-value {
+    max-width: 100%;
+    text-align: left;
+  }
+  
+  .panel-footer {
+    flex-direction: column;
+    gap: 8px;
   }
 }
 </style>
